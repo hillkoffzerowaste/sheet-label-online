@@ -21,8 +21,9 @@ npm run build
 
 - รับไฟล์ PDF ผ่านหน้าเว็บด้วย file picker หรือ drag-and-drop
 - แสดงคิวไฟล์จาก Web App และตัวอย่างไฟล์จาก Google Drive
-- จำลอง workflow 6 ขั้นตอน:
+- จำลอง workflow 7 ขั้นตอน:
   - อ่านข้อความใน PDF
+  - Gemini อ่าน PDF
   - ตรวจช่องทาง Marketplace
   - เลือก Parser
   - แยกรายการคำสั่งซื้อ
@@ -51,6 +52,22 @@ const FAILED_SHEET_NAME = "Read Failed";
 - `Read Failed`: เก็บรายการที่อ่านไม่ได้, ข้อมูลไม่ครบ, Marketplace ไม่รู้จัก, หรือ Order ID ซ้ำ
 
 ถ้าจะใช้ OCR อ่าน PDF ใน Apps Script ให้เปิด Advanced Google services > Drive API ก่อน เพราะ `extractPdfText_()` ใช้ `Drive.Files.copy()` เพื่อแปลง PDF เป็น Google Docs ชั่วคราว
+
+## Gemini Setup
+
+การประมวลผลจริงใน `apps-script/Code.gs` ใช้ Gemini อ่าน PDF โดยตรง และไม่ส่ง API key ไปที่ Web App
+
+1. เปิด Apps Script project แล้วเลือก **Project Settings** > **Script Properties**
+2. เพิ่ม `GEMINI_API_KEY` ด้วย Gemini API key ที่ใช้งานจริง
+3. เพิ่ม `GEMINI_MODEL` ด้วยชื่อโมเดลที่ต้องการใช้ เช่น `gemini-2.5-flash` (หากไม่กำหนด ระบบจะใช้ค่า default เดียวกันใน Apps Script)
+4. ตรวจว่า `Orders` รักษาคอลัมน์เดิมไว้ และมี `Source`, `Confidence` ต่อท้าย; `Read Failed` ต้องมี `Confidence`, `Missing Fields`, `Raw Notes` ต่อท้าย
+5. วาง PDF ที่ทราบผลไว้ใน input folder หนึ่งไฟล์, ตรวจ execution log, ตรวจแถวในชีตปลายทาง และยืนยันว่าไฟล์ถูกย้ายไปยัง Processed folder ตามสถานะ
+
+Gemini จะดึงข้อมูลออกมาเป็น JSON เท่านั้น จากนั้น Apps Script จะตรวจ Order ID ซ้ำ, ข้อมูลบังคับ, และ confidence อย่างน้อย 70 ก่อนเขียน `Orders` sheet
+
+- ปัญหา Gemini transport, การตั้งค่า หรือการเขียน Google Sheet จะคงไฟล์ไว้ใน input folder เพื่อให้ trigger รอบต่อไปลองใหม่
+- JSON ที่ไม่ตรง schema, ข้อมูลไม่ครบ, confidence ต่ำ และ Order ID ซ้ำ จะถูกบันทึกลง `Read Failed` แล้วจึงย้าย PDF ไป `Processed`
+- Web App รุ่นนี้ใช้ข้อมูลจำลองเพื่อแสดง Gemini status และไม่เรียก Gemini API โดยตรง
 
 ## Integration Notes
 
