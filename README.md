@@ -1,8 +1,8 @@
-# PDF Order Intake Web App
+# Marketplace Shipping Label Reader
 
-Prototype web app สำหรับรับ PDF คำสั่งซื้อ marketplace แล้วจำลอง workflow ก่อนบันทึกลง Google Sheet
+Web App สำหรับดูรายการใบปะหน้าจัดส่งจาก Shopee, Lazada และ TikTok Shop หลัง Google Apps Script อ่าน PDF ใน Google Drive อัตโนมัติ
 
-## Run Locally
+## Run locally
 
 ```bash
 npm install
@@ -12,81 +12,75 @@ npm run dev
 ## Verify
 
 ```bash
-npm run test:workflow
 npm test
-npm run build
+npm run lint
+npx next build
 ```
 
-## What The Prototype Does
+## What the dashboard shows
 
-- รับไฟล์ PDF ผ่านหน้าเว็บด้วย file picker หรือ drag-and-drop
-- แสดงคิวไฟล์จาก Web App และตัวอย่างไฟล์จาก Google Drive
-- จำลอง workflow 7 ขั้นตอน:
-  - อ่านข้อความใน PDF
-  - Gemini อ่าน PDF
-  - ตรวจช่องทาง Marketplace
-  - เลือก Parser
-  - แยกรายการคำสั่งซื้อ
-  - ตรวจ Order ID ซ้ำ
-  - ตรวจข้อมูลครบ
-- แยกผลลัพธ์เป็นข้อมูลครบ, ข้อมูลไม่ครบ, Order ID ซ้ำ, และอ่าน PDF ไม่สำเร็จ
-- แสดงผลลัพธ์ที่พร้อมนำไปลง Google Sheet
+หนึ่งใบปะหน้าจัดส่งเป็นหนึ่งแถว แม้ PDF หนึ่งหน้าจะมีหลายใบปะหน้า ตารางมีคอลัมน์ดังนี้:
 
-## Google Apps Script Setup
+1. `Marketplace`
+2. `ชื่อผู้รับ`
+3. `ที่อยู่จัดส่ง`
+4. `หมายเลขคำสั่งซื้อ`
+5. `เลขพัสดุ`
 
-ไฟล์ตัวอย่างอยู่ที่ `apps-script/Code.gs`
+มีช่องค้นหาจากทุกคอลัมน์, ตัวกรอง Marketplace/สถานะ, ปุ่มคัดลอกเลขพัสดุ และป้าย `ต้องตรวจสอบ` เมื่อข้อมูลไม่ครบ, ระบุ Marketplace ไม่ได้, Order ID ซ้ำ หรือเลขพัสดุซ้ำ
 
-ก่อนใช้งานจริง ให้เปลี่ยน constants ด้านบนของไฟล์:
+## Automatic PDF processing
+
+Apps Script ใน `apps-script/Code.gs` เป็นผู้ประมวลผลเพียงรายเดียว:
+
+1. ตรวจ PDF ใน Google Drive input folder
+2. อ่านใบปะหน้าจาก Shopee, Lazada หรือ TikTok Shop
+3. ใช้ Gemini เมื่อ parser ต้องการข้อมูลโครงสร้างจาก PDF
+4. ตรวจข้อมูลที่จำเป็นและหมายเลขซ้ำ
+5. เขียนผลลัพธ์ลง Google Sheet แล้วจึงย้าย PDF ที่บันทึกสำเร็จไป Processed folder
+
+Web App ไม่มี API key และไม่เริ่มประมวลผล PDF ใน production; หน้าจอมีไว้แสดงข้อมูลใบปะหน้ามาตรฐานและเปิด Google Sheet เท่านั้น
+
+## Google Apps Script setup
+
+วางเนื้อหาจาก `apps-script/Code.gs` ใน Apps Script project แล้วกำหนดค่า:
 
 ```js
 const INPUT_FOLDER_ID = "PASTE_INPUT_FOLDER_ID";
 const PROCESSED_FOLDER_ID = "PASTE_PROCESSED_FOLDER_ID";
 const SPREADSHEET_ID = "PASTE_SPREADSHEET_ID";
-const SUCCESS_SHEET_NAME = "Orders";
-const FAILED_SHEET_NAME = "Read Failed";
 ```
 
-โครงสร้างชีตที่แนะนำ:
+ตั้งค่า Script Properties:
 
-- `Orders`: เก็บรายการที่ข้อมูลครบ
-- `Read Failed`: เก็บรายการที่อ่านไม่ได้, ข้อมูลไม่ครบ, Marketplace ไม่รู้จัก, หรือ Order ID ซ้ำ
+```text
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.5-flash
+```
 
-ถ้าจะใช้ OCR อ่าน PDF ใน Apps Script ให้เปิด Advanced Google services > Drive API ก่อน เพราะ `extractPdfText_()` ใช้ `Drive.Files.copy()` เพื่อแปลง PDF เป็น Google Docs ชั่วคราว
+Apps Script จะเพิ่มแท็บ `Shipping Labels` เมื่อต้องเขียนผลครั้งแรก โดยมีคอลัมน์:
 
-## Gemini Setup
+```text
+Processed At, Source File, Marketplace, Recipient Name, Shipping Address,
+Order ID, Tracking Number, Status, Review Reasons, File URL
+```
 
-การประมวลผลจริงใน `apps-script/Code.gs` ใช้ Gemini อ่าน PDF โดยตรง และไม่ส่ง API key ไปที่ Web App
-
-1. เปิด Apps Script project แล้วเลือก **Project Settings** > **Script Properties**
-2. เพิ่ม `GEMINI_API_KEY` ด้วย Gemini API key ที่ใช้งานจริง
-3. เพิ่ม `GEMINI_MODEL` ด้วยชื่อโมเดลที่ต้องการใช้ เช่น `gemini-2.5-flash` (หากไม่กำหนด ระบบจะใช้ค่า default เดียวกันใน Apps Script)
-4. ตรวจว่า `Orders` รักษาคอลัมน์เดิมไว้ และมี `Source`, `Confidence` ต่อท้าย; `Read Failed` ต้องมี `Confidence`, `Missing Fields`, `Raw Notes` ต่อท้าย
-5. วาง PDF ที่ทราบผลไว้ใน input folder หนึ่งไฟล์, ตรวจ execution log, ตรวจแถวในชีตปลายทาง และยืนยันว่าไฟล์ถูกย้ายไปยัง Processed folder ตามสถานะ
-
-Gemini จะดึงข้อมูลออกมาเป็น JSON เท่านั้น จากนั้น Apps Script จะตรวจ Order ID ซ้ำ, ข้อมูลบังคับ, และ confidence อย่างน้อย 70 ก่อนเขียน `Orders` sheet
-
-- ปัญหา Gemini transport, การตั้งค่า หรือการเขียน Google Sheet จะคงไฟล์ไว้ใน input folder เพื่อให้ trigger รอบต่อไปลองใหม่
-- JSON ที่ไม่ตรง schema, ข้อมูลไม่ครบ, confidence ต่ำ และ Order ID ซ้ำ จะถูกบันทึกลง `Read Failed` แล้วจึงย้าย PDF ไป `Processed`
-- Web App รุ่นนี้ใช้ข้อมูลจำลองเพื่อแสดง Gemini status และไม่เรียก Gemini API โดยตรง
+หาก Gemini หรือ Google Sheet มีความผิดพลาดที่ลองใหม่ได้ ระบบจะคง PDF ไว้ใน input folder สำหรับรอบถัดไป. รายการที่อ่านไม่ครบแต่บันทึกได้จะถูกเก็บเป็น `review` ใน `Shipping Labels` เพื่อไม่ให้ข้อมูลสูญหาย.
 
 ## Go to Sheet
 
-Set this Vercel environment variable to the destination Google Sheet URL:
+กำหนด Vercel environment variable นี้เป็น URL ของ spreadsheet ปลายทาง:
 
 ```bash
 NEXT_PUBLIC_DESTINATION_SHEET_URL=https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
 ```
 
-`Go to Sheet` is always visible in the top bar. It opens the Sheet in a new tab when this is a valid URL. If the value is missing or invalid, the button is disabled. This is a public URL, not an API key; Google sharing settings still control access.
+ปุ่ม `Go to Sheet` จะแสดงเสมอ. เมื่อ URL ถูกต้อง ปุ่มจะเปิดชีตในแท็บใหม่; เมื่อยังไม่ตั้งค่าหรือ URL ไม่ถูกต้อง ปุ่มจะถูกปิดใช้งาน. ค่านี้เป็น URL สาธารณะ ไม่ใช่ API key และสิทธิ์เข้าถึงยังควบคุมด้วย Google sharing settings.
 
-## Vercel Deployment
+## Vercel deployment
 
-โปรเจกต์นี้มีทั้ง Vinext สำหรับ Cloudflare และ Next.js สำหรับ Vercel. ไฟล์ `vercel.json` บังคับให้ Vercel ใช้ `npx next build` ซึ่งสร้าง output directory `.next` ที่ Vercel ต้องการ และ `tsconfig.vercel.json` จะตัด Cloudflare worker ออกจากการตรวจ type ของ Next.js
+`vercel.json` กำหนดให้ Vercel ใช้ `npx next build` ซึ่งสร้าง `.next` ที่ Vercel ต้องใช้. เชื่อม repository ที่ root directory และไม่ต้องกำหนด Output Directory เพิ่ม.
 
-เมื่อเชื่อม GitHub repository กับ Vercel ให้ใช้ root directory ของ repository นี้ และปล่อยให้ Vercel อ่าน `vercel.json`; ไม่ต้องตั้ง Output Directory เอง
+## Data safety
 
-## Integration Notes
-
-- หน้าเว็บรุ่นนี้ยังจำลองการอ่าน PDF ใน browser
-- เมื่อต้องเชื่อมจริง ให้สร้าง Apps Script Web App แล้วให้ frontend ส่ง `fileId` ไปที่ `doPost(e)`
-- PDF ที่ประมวลผลแล้วจะถูกย้ายไปโฟลเดอร์ Processed จากฝั่ง Apps Script
+อย่า commit PDF ลูกค้าจริง, API key, ชื่อผู้รับ, ที่อยู่, Order ID หรือเลขพัสดุ. Fixtures และ tests ใน repository ใช้ข้อมูลสังเคราะห์เท่านั้น.

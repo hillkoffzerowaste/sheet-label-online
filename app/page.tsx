@@ -113,7 +113,7 @@ export default function Home() {
           <p className="eyebrow">Sheet Label Online</p>
           <h1>รับ PDF คำสั่งซื้อ</h1>
           <p className="topbar-description">
-            ความมั่นใจจาก Gemini ใช้เพื่อระบุรายการที่ต้องตรวจสอบ. 
+            ความมั่นใจจาก Gemini ใช้เพื่อระบุรายการที่ต้องตรวจสอบ.
             ไม่ต้องอัปโหลด PDF จากหน้าเว็บ: Apps Script อ่านจาก Google Drive, ใช้ Gemini เมื่อรูปแบบไม่ชัดเจน,
             ตรวจ Order ID ซ้ำ และส่งเฉพาะข้อมูลครบหรือรายการที่ต้องตรวจสอบมายังตารางนี้
           </p>
