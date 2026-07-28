@@ -79,6 +79,18 @@ NEXT_PUBLIC_DESTINATION_SHEET_URL=https://docs.google.com/spreadsheets/d/YOUR_SH
 
 ปุ่ม `Go to Sheet` จะแสดงเสมอ. เมื่อ URL ถูกต้อง ปุ่มจะเปิดชีตในแท็บใหม่; เมื่อยังไม่ตั้งค่าหรือ URL ไม่ถูกต้อง ปุ่มจะถูกปิดใช้งาน. ค่านี้เป็น URL สาธารณะ ไม่ใช่ API key และสิทธิ์เข้าถึงยังควบคุมด้วย Google sharing settings.
 
+## Go to Drive and PDF selection
+
+กำหนด Vercel environment variable นี้เป็น URL ของ Google Drive input folder ที่ Apps Script เฝ้าดู:
+
+```bash
+NEXT_PUBLIC_INPUT_DRIVE_URL=https://drive.google.com/drive/u/0/folders/1w_qEAjYeZFTmENeoFyjGVRX3syTNB2v5
+```
+
+ปุ่ม `เลือกไฟล์ PDF` รองรับการเลือกหลายไฟล์และแสดงเฉพาะชื่อ/ขนาดในเบราว์เซอร์เพื่อช่วยตรวจสอบก่อนอัปโหลดเท่านั้น เว็บแอปจะไม่อัปโหลด ส่งต่อ เก็บ หรืออ่านเนื้อหา PDF. ให้กด `Go to Drive` แล้วอัปโหลดไฟล์เหล่านั้นเข้า input folder; time-driven trigger ของ Apps Script จะตรวจพบและประมวลผลไฟล์ในรอบถัดไป.
+
+ในตาราง Shipping Labels สามารถกดคัดลอกชื่อผู้รับ, ที่อยู่ และเลขพัสดุได้ทีละแถว. ข้อมูลจะถูกใช้กับ clipboard หลังผู้ใช้กดปุ่มเท่านั้น และจะไม่ถูกบันทึกเพิ่มโดยหน้าเว็บ.
+
 ## Vercel deployment
 
 `vercel.json` กำหนดให้ Vercel ใช้ `npx next build` ซึ่งสร้าง `.next` ที่ Vercel ต้องใช้. เชื่อม repository ที่ root directory และไม่ต้องกำหนด Output Directory เพิ่ม.
