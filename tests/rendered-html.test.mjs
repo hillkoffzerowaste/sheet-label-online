@@ -39,6 +39,8 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /ความมั่นใจ/);
   assert.match(html, /ตรวจ Order ID ซ้ำ/);
   assert.match(html, /ข้อมูลครบ/);
+  assert.match(html, /Go to Sheet/);
+  assert.match(html, /<button[^>]*disabled[^>]*>Go to Sheet<\/button>/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
 
   await assert.rejects(access(new URL("app/_sites-preview", templateRoot)));

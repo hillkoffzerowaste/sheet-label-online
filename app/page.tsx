@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { getDestinationSheetUrl } from "../src/destination-sheet";
 import {
   type PdfJob,
   type ProcessedOrder,
@@ -31,6 +32,9 @@ const missingFieldCopy: Record<string, string> = {
 };
 
 export default function Home() {
+  const destinationSheetUrl = getDestinationSheetUrl(
+    process.env.NEXT_PUBLIC_DESTINATION_SHEET_URL,
+  );
   const [jobs, setJobs] = useState<PdfJob[]>(sampleDriveFiles);
   const [results, setResults] = useState<ProcessedOrder[]>([]);
   const [activeStep, setActiveStep] = useState(-1);
@@ -107,6 +111,27 @@ export default function Home() {
           <h1>รับ PDF คำสั่งซื้อ</h1>
         </div>
         <div className="topbar-actions">
+          {destinationSheetUrl ? (
+            <a
+              aria-label="Open the destination Google Sheet in a new tab"
+              className="ghost-button sheet-link"
+              href={destinationSheetUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Go to Sheet
+            </a>
+          ) : (
+            <button
+              aria-label="Destination Google Sheet has not been configured"
+              className="ghost-button sheet-link"
+              disabled
+              title="Set NEXT_PUBLIC_DESTINATION_SHEET_URL to enable this link"
+              type="button"
+            >
+              Go to Sheet
+            </button>
+          )}
           <button className="ghost-button" onClick={resetBatch} type="button">
             ล้างชุดงาน
           </button>

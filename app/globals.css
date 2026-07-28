@@ -104,8 +104,11 @@ button {
   transform: translateY(-1px);
 }
 
-.primary-button:disabled {
+.primary-button:disabled,
+.ghost-button:disabled {
   background: #9aa7a4;
+  border-color: #9aa7a4;
+  color: #ffffff;
   cursor: not-allowed;
   transform: none;
 }
@@ -115,6 +118,13 @@ button {
   background: #ffffff;
   border: 1px solid var(--line);
   color: var(--ink-soft);
+}
+
+.sheet-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
 .summary-strip {

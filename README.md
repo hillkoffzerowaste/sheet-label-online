@@ -69,6 +69,16 @@ Gemini จะดึงข้อมูลออกมาเป็น JSON เท�
 - JSON ที่ไม่ตรง schema, ข้อมูลไม่ครบ, confidence ต่ำ และ Order ID ซ้ำ จะถูกบันทึกลง `Read Failed` แล้วจึงย้าย PDF ไป `Processed`
 - Web App รุ่นนี้ใช้ข้อมูลจำลองเพื่อแสดง Gemini status และไม่เรียก Gemini API โดยตรง
 
+## Go to Sheet
+
+Set this Vercel environment variable to the destination Google Sheet URL:
+
+```bash
+NEXT_PUBLIC_DESTINATION_SHEET_URL=https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
+```
+
+`Go to Sheet` is always visible in the top bar. It opens the Sheet in a new tab when this is a valid URL. If the value is missing or invalid, the button is disabled. This is a public URL, not an API key; Google sharing settings still control access.
+
 ## Vercel Deployment
 
 โปรเจกต์นี้มีทั้ง Vinext สำหรับ Cloudflare และ Next.js สำหรับ Vercel. ไฟล์ `vercel.json` บังคับให้ Vercel ใช้ `npx next build` ซึ่งสร้าง output directory `.next` ที่ Vercel ต้องการ และ `tsconfig.vercel.json` จะตัด Cloudflare worker ออกจากการตรวจ type ของ Next.js
