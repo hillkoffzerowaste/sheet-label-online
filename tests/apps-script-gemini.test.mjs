@@ -83,3 +83,29 @@ test("routes malformed and low-confidence Gemini results to read failed", async 
   assert.ok(malformedResult.missingFields.includes("total"));
   assert.equal(context.classifyGeminiOrder_(lowConfidence, false).status, "incomplete");
 });
+
+test("normalizes shipping labels and marks duplicate orders for review", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("fixture.pdf", [
+    {
+      marketplace: "shopee",
+      recipientName: "Mali Demo",
+      shippingAddress: "Bangkok 10110",
+      orderId: "260728AAA111",
+      trackingNumber: "TH100000000001A",
+    },
+    {
+      marketplace: "tiktok-shop",
+      recipientName: "Ploy Demo",
+      shippingAddress: "Phuket 83000",
+      orderId: "260728AAA111",
+      trackingNumber: "TTS-TRACK-1",
+    },
+  ]);
+
+  assert.equal(labels.length, 2);
+  assert.equal(labels[0].marketplace, "Shopee");
+  assert.equal(labels[1].marketplace, "TikTok Shop");
+  assert.ok(labels.every((label) => label.status === "review"));
+  assert.ok(labels[0].reviewReasons.includes("duplicateOrderId"));
+});

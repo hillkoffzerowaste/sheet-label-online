@@ -3,6 +3,19 @@ const PROCESSED_FOLDER_ID = "PASTE_PROCESSED_FOLDER_ID";
 const SPREADSHEET_ID = "PASTE_SPREADSHEET_ID";
 const SUCCESS_SHEET_NAME = "Orders";
 const FAILED_SHEET_NAME = "Read Failed";
+const SHIPPING_LABELS_SHEET_NAME = "Shipping Labels";
+const SHIPPING_LABEL_HEADERS = [
+  "Processed At",
+  "Source File",
+  "Marketplace",
+  "Recipient Name",
+  "Shipping Address",
+  "Order ID",
+  "Tracking Number",
+  "Status",
+  "Review Reasons",
+  "File URL",
+];
 const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_MIN_CONFIDENCE = 70;
@@ -55,6 +68,34 @@ const GEMINI_ORDER_SCHEMA = {
   ],
 };
 
+const SHIPPING_LABEL_EXTRACTION_PROMPT = [
+  "Extract every marketplace shipping label from this PDF.",
+  "Return one object per label, even when a page contains more than one label.",
+  "Never guess: use an empty string when a value is not printed on the label.",
+  "marketplace must be shopee, lazada, tiktok-shop, or unknown.",
+].join("\\n");
+
+const GEMINI_SHIPPING_LABEL_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      marketplace: { type: "string" },
+      recipientName: { type: "string" },
+      shippingAddress: { type: "string" },
+      orderId: { type: "string" },
+      trackingNumber: { type: "string" },
+    },
+    required: [
+      "marketplace",
+      "recipientName",
+      "shippingAddress",
+      "orderId",
+      "trackingNumber",
+    ],
+  },
+};
+
 function doPost(e) {
   const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
   const fileId = payload.fileId;
@@ -102,6 +143,11 @@ function processDriveFile(fileId) {
     order.missingFields = classification.missingFields;
 
     writeOrderResult_(order);
+    const shippingLabels = normalizeShippingLabels_(
+      file.getName(),
+      extractShippingLabelsWithGemini_(file),
+    );
+    writeShippingLabels_(shippingLabels, file.getUrl());
     moveToProcessed(file);
     return order;
   } catch (error) {
@@ -245,6 +291,67 @@ function extractOrderWithGemini_(file) {
   }
 
   return normalizeGeminiOrder_(raw);
+}
+
+function extractShippingLabelsWithGemini_(file) {
+  if (file.getMimeType() !== MimeType.PDF) {
+    throw createProcessingError_("GeminiResponseError", "เธเธฒเธเธ•เธเนเธญเธเน€เธเนเธ PDF", false);
+  }
+
+  const config = getGeminiConfig_();
+  const payload = {
+    contents: [
+      {
+        parts: [
+          { text: SHIPPING_LABEL_EXTRACTION_PROMPT },
+          {
+            inlineData: {
+              mimeType: MimeType.PDF,
+              data: Utilities.base64Encode(file.getBlob().getBytes()),
+            },
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseJsonSchema: GEMINI_SHIPPING_LABEL_SCHEMA,
+    },
+  };
+  const endpoint = GEMINI_API_ROOT + encodeURIComponent(config.model) + ":generateContent";
+  let response;
+
+  try {
+    response = UrlFetchApp.fetch(endpoint, {
+      method: "post",
+      contentType: "application/json",
+      headers: { "x-goog-api-key": config.apiKey },
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true,
+    });
+  } catch (error) {
+    throw createProcessingError_("GeminiTransportError", "เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เน€เธเธทเนเธญเธกเธ•เนเธญ Gemini เน€เธเธทเนเธญเธญเนเธฒเธเนเธเธเธฐเธซเธเนเธฒ", true);
+  }
+
+  const status = response.getResponseCode();
+  if (status < 200 || status >= 300) {
+    throw createProcessingError_("GeminiTransportError", "Gemini เธ•เธญเธเธเธฅเธฑเธเธ”เนเธงเธข HTTP " + status, true);
+  }
+
+  let body;
+  let raw;
+  try {
+    body = JSON.parse(response.getContentText());
+    raw = JSON.parse(getGeminiResponseText_(body));
+  } catch (error) {
+    throw createProcessingError_("GeminiResponseError", "Gemini เธชเนเธ JSON เนเธเธเธฐเธซเธเนเธฒเธ—เธตเนเนเธกเนเธ–เธนเธเธ•เนเธญเธ", false);
+  }
+
+  if (!Array.isArray(raw)) {
+    throw createProcessingError_("GeminiResponseError", "Gemini เธชเนเธเธเธฅเธฅเธฑเธเธเนเนเธเธเธฐเธซเธเนเธฒเน€เธเนเธรูปแบบเนเธกเนเธ–เธนเธเธ•เนเธญเธ", false);
+  }
+
+  return raw;
 }
 
 function getGeminiConfig_() {
@@ -541,6 +648,103 @@ function appendFailedRow(order) {
     (order.missingFields || []).join(", "),
     order.rawNotes || "",
   ]);
+}
+
+function normalizeShippingLabels_(fileName, values) {
+  const labels = (Array.isArray(values) ? values : []).map(function (value, index) {
+    const marketplace = normalizeMarketplace_(value && value.marketplace);
+    const label = {
+      id: fileName + "-" + (index + 1),
+      sourceFileName: fileName,
+      marketplace,
+      recipientName: stringValue_(value && value.recipientName),
+      shippingAddress: stringValue_(value && value.shippingAddress),
+      orderId: stringValue_(value && value.orderId),
+      trackingNumber: stringValue_(value && value.trackingNumber),
+      status: "ready",
+      reviewReasons: [],
+    };
+    label.reviewReasons = getShippingLabelReviewReasons_(label);
+    label.status = label.reviewReasons.length > 0 ? "review" : "ready";
+    return label;
+  });
+
+  const duplicateOrderIds = duplicateShippingLabelValues_(labels, "orderId");
+  const duplicateTrackingNumbers = duplicateShippingLabelValues_(labels, "trackingNumber");
+
+  return labels.map(function (label) {
+    if (duplicateOrderIds.indexOf(label.orderId) >= 0) {
+      label.reviewReasons.push("duplicateOrderId");
+    }
+    if (duplicateTrackingNumbers.indexOf(label.trackingNumber) >= 0) {
+      label.reviewReasons.push("duplicateTrackingNumber");
+    }
+    label.reviewReasons = uniqueValues_(label.reviewReasons);
+    label.status = label.reviewReasons.length > 0 ? "review" : "ready";
+    return label;
+  });
+}
+
+function getShippingLabelReviewReasons_(label) {
+  const reasons = [];
+  if (label.marketplace === "Unknown") reasons.push("marketplace");
+  if (!label.recipientName) reasons.push("recipientName");
+  if (!label.shippingAddress) reasons.push("shippingAddress");
+  if (!label.orderId) reasons.push("orderId");
+  if (!label.trackingNumber) reasons.push("trackingNumber");
+  return reasons;
+}
+
+function duplicateShippingLabelValues_(labels, fieldName) {
+  const counts = {};
+  labels.forEach(function (label) {
+    const value = label[fieldName];
+    if (value) counts[value] = (counts[value] || 0) + 1;
+  });
+  return Object.keys(counts).filter(function (value) {
+    return counts[value] > 1;
+  });
+}
+
+function writeShippingLabels_(labels, fileUrl) {
+  try {
+    const sheet = getShippingLabelsSheet_();
+    labels.forEach(function (label) {
+      sheet.appendRow([
+        new Date(),
+        label.sourceFileName,
+        label.marketplace,
+        label.recipientName,
+        label.shippingAddress,
+        label.orderId,
+        label.trackingNumber,
+        label.status,
+        label.reviewReasons.join(", "),
+        fileUrl,
+      ]);
+    });
+  } catch (error) {
+    throw createProcessingError_(
+      "SheetWriteError",
+      "เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เธเธฑเธเธ—เธถเธเนเธเธเธฐเธซเธเนเธฒเธฅเธ Google Sheet เนเธ”เน",
+      true,
+    );
+  }
+}
+
+function getShippingLabelsSheet_() {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  let sheet = spreadsheet.getSheetByName(SHIPPING_LABELS_SHEET_NAME);
+  if (!sheet) sheet = spreadsheet.insertSheet(SHIPPING_LABELS_SHEET_NAME);
+
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, SHIPPING_LABEL_HEADERS.length).setValues([
+      SHIPPING_LABEL_HEADERS,
+    ]);
+    sheet.setFrozenRows(1);
+  }
+
+  return sheet;
 }
 
 function stringValue_(value) {
