@@ -1,4 +1,6 @@
-export type Marketplace = "Shopee" | "Lazada" | "TikTok Shop" | "Unknown";
+import type { Marketplace } from "./shipping-label";
+
+export type { Marketplace } from "./shipping-label";
 
 export type OrderStatus = "ready" | "incomplete" | "duplicate" | "failed";
 
