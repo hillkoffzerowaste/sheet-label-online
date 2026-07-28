@@ -14,6 +14,8 @@ that Apps Script monitors.
 - Reject non-PDF files with an accessible Thai error message.
 - Add a `Go to Drive` link that opens the configured Google Drive input folder
   in a new tab.
+- Add separate copy controls for each recipient name and shipping address in
+  the shipping-label table.
 - Use `NEXT_PUBLIC_INPUT_DRIVE_URL` for the Drive folder URL, with validation
   that accepts only a Google Drive folder URL.
 - Configure the URL in Vercel production and redeploy after implementation.
@@ -36,6 +38,9 @@ that Apps Script monitors.
    input folder.
 5. `Go to Drive` opens the configured Drive input folder in a new tab. Apps
    Script later detects and processes the uploaded PDFs automatically.
+6. The operator can copy a recipient name or shipping address directly from
+   each table row. The clicked control briefly confirms that its value was
+   copied.
 
 ## UI and accessibility
 
@@ -45,11 +50,15 @@ that Apps Script monitors.
 - Use an `aria-live` status message for selection and validation feedback.
 - Disable `Go to Drive` with an explanatory tooltip when its environment
   variable is absent or invalid.
+- Label copy controls with the field value and ensure an empty value has no
+  copy control.
 
 ## Data and validation
 
 - The selected `File` objects remain in React component state only and are
   discarded on refresh.
+- Copy controls use the browser clipboard only after the user clicks them;
+  they do not persist copied recipient data.
 - A small URL utility validates `https://drive.google.com/.../folders/<id>`
   URLs before rendering the outbound link.
 - File size is shown in KB or MB using a deterministic local formatter.
@@ -58,6 +67,7 @@ that Apps Script monitors.
 
 - Add unit tests for Drive URL validation and PDF file eligibility/size
   formatting helpers.
+- Cover the copy-button state transitions for recipient name and address.
 - Run `npm test`, `npm run lint`, and `npx next build`.
 - Verify the Vercel production deployment renders the configured Drive folder
   URL and responds successfully.
