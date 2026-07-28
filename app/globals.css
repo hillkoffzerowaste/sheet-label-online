@@ -505,3 +505,150 @@ tbody tr.selected {
     font-size: 26px;
   }
 }
+
+.topbar-description {
+  max-width: 680px;
+  margin: 7px 0 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.labels-panel {
+  margin-bottom: 20px;
+}
+
+.labels-heading {
+  align-items: flex-start;
+}
+
+.label-toolbar {
+  display: grid;
+  grid-template-columns: minmax(230px, 1fr) repeat(2, minmax(150px, 190px));
+  gap: 12px;
+  margin: 4px 0 18px;
+}
+
+.search-field,
+.filter-field {
+  display: grid;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.search-field input,
+.filter-field select {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  padding: 0 12px;
+}
+
+.shipping-label-table th:nth-child(1) {
+  min-width: 118px;
+}
+
+.shipping-label-table th:nth-child(2) {
+  min-width: 175px;
+}
+
+.shipping-label-table th:nth-child(3) {
+  min-width: 290px;
+}
+
+.shipping-label-table th:nth-child(4),
+.shipping-label-table th:nth-child(5) {
+  min-width: 190px;
+}
+
+.shipping-label-table tr.needs-review {
+  background: #fffaf0;
+}
+
+.marketplace-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.marketplace-shopee {
+  background: #fff0eb;
+  color: #c24118;
+}
+
+.marketplace-lazada {
+  background: #f2efff;
+  color: #6246c8;
+}
+
+.marketplace-tiktok-shop {
+  background: #eafafa;
+  color: #087f7f;
+}
+
+.marketplace-unknown {
+  background: #f0f2f1;
+  color: #5c6864;
+}
+
+.identifier-cell,
+.tracking-cell code {
+  color: var(--ink);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tracking-cell {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.copy-button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 0 8px;
+}
+
+.copy-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.review-reasons {
+  display: block;
+  margin-top: 5px;
+  color: #a15c07;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 760px) {
+  .label-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .shipping-label-table {
+    min-width: 980px;
+  }
+}

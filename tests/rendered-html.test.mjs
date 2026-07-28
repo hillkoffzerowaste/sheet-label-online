@@ -40,6 +40,16 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /ตรวจ Order ID ซ้ำ/);
   assert.match(html, /ข้อมูลครบ/);
   assert.match(html, /Go to Sheet/);
+  assert.match(html, /Marketplace/);
+  assert.match(html, /ชื่อผู้รับ/);
+  assert.match(html, /ที่อยู่จัดส่ง/);
+  assert.match(html, /หมายเลขคำสั่งซื้อ/);
+  assert.match(html, /เลขพัสดุ/);
+  assert.match(html, /Shopee/);
+  assert.match(html, /Lazada/);
+  assert.match(html, /TikTok Shop/);
+  assert.match(html, /ค้นหารายการ/);
+  assert.match(html, /คัดลอกเลขพัสดุ/);
   assert.match(html, /<button[^>]*disabled[^>]*>Go to Sheet<\/button>/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
 
