@@ -69,6 +69,12 @@ Gemini จะดึงข้อมูลออกมาเป็น JSON เท�
 - JSON ที่ไม่ตรง schema, ข้อมูลไม่ครบ, confidence ต่ำ และ Order ID ซ้ำ จะถูกบันทึกลง `Read Failed` แล้วจึงย้าย PDF ไป `Processed`
 - Web App รุ่นนี้ใช้ข้อมูลจำลองเพื่อแสดง Gemini status และไม่เรียก Gemini API โดยตรง
 
+## Vercel Deployment
+
+โปรเจกต์นี้มีทั้ง Vinext สำหรับ Cloudflare และ Next.js สำหรับ Vercel. ไฟล์ `vercel.json` บังคับให้ Vercel ใช้ `npx next build` ซึ่งสร้าง output directory `.next` ที่ Vercel ต้องการ และ `tsconfig.vercel.json` จะตัด Cloudflare worker ออกจากการตรวจ type ของ Next.js
+
+เมื่อเชื่อม GitHub repository กับ Vercel ให้ใช้ root directory ของ repository นี้ และปล่อยให้ Vercel อ่าน `vercel.json`; ไม่ต้องตั้ง Output Directory เอง
+
 ## Integration Notes
 
 - หน้าเว็บรุ่นนี้ยังจำลองการอ่าน PDF ใน browser
