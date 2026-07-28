@@ -5,6 +5,7 @@ import {
   type PdfJob,
   type ProcessedOrder,
   type WorkflowStep,
+  processGeminiExtraction,
   processPdfJob,
   sampleDriveFiles,
   workflowSteps,
@@ -26,6 +27,7 @@ const missingFieldCopy: Record<string, string> = {
   items: "รายการสินค้า",
   quantity: "จำนวน",
   address: "ที่อยู่จัดส่ง",
+  total: "ยอดรวม",
 };
 
 export default function Home() {
@@ -79,7 +81,11 @@ export default function Home() {
     }
 
     const processed = jobs.map((job) =>
-      processPdfJob(job.fileName, job.text, existingOrderIds),
+      processGeminiExtraction(
+        job.fileName,
+        buildDemoGeminiExtraction(job),
+        existingOrderIds,
+      ),
     );
     setResults(processed);
     setSelectedId(processed[0]?.id ?? null);
@@ -233,9 +239,20 @@ export default function Home() {
                     : selectedOrder.reason ?? "พร้อมบันทึกลง Google Sheet"}
                 </span>
               </div>
+              {selectedOrder.source === "gemini" ? (
+                <div className="ai-meta">
+                  <p className="ai-meta-label">Gemini อ่าน PDF</p>
+                  <strong>ความมั่นใจ: {formatConfidence(selectedOrder.confidence)}</strong>
+                  {selectedOrder.rawNotes ? (
+                    <span className="ai-meta-note">{selectedOrder.rawNotes}</span>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : (
-            <p className="empty-state">ยังไม่มีผลลัพธ์</p>
+            <p className="empty-state">
+              ยังไม่มีผลลัพธ์ — เมื่อ Gemini อ่านไฟล์แล้วจะแสดงความมั่นใจที่นี่
+            </p>
           )}
         </div>
       </section>
@@ -259,13 +276,14 @@ export default function Home() {
                 <th>ลูกค้า</th>
                 <th>สินค้า</th>
                 <th>ยอดรวม</th>
+                <th>AI</th>
                 <th>สถานะ</th>
               </tr>
             </thead>
             <tbody>
               {results.length === 0 ? (
                 <tr>
-                  <td className="table-empty" colSpan={7}>
+                  <td className="table-empty" colSpan={8}>
                     กดเริ่มประมวลผลเพื่อดูรายการ
                   </td>
                 </tr>
@@ -282,6 +300,11 @@ export default function Home() {
                     <td>{order.customerName || "-"}</td>
                     <td>{formatItems(order)}</td>
                     <td>{order.total > 0 ? order.total.toLocaleString("th-TH") : "-"}</td>
+                    <td>
+                      {order.source === "gemini"
+                        ? `Gemini ${formatConfidence(order.confidence)}`
+                        : "Parser"}
+                    </td>
                     <td>
                       <span className={`status-chip ${order.status}`}>
                         {statusCopy[order.status]}
@@ -358,12 +381,36 @@ function buildDemoPdfText(fileName: string, index: number) {
   return `Shopee Order ID SP-${6000 + index} Customer: Dara Item: Label Paper Qty: 5 Address: Bangkok Total: 550`;
 }
 
+function buildDemoGeminiExtraction(job: PdfJob) {
+  const parsed = processPdfJob(job.fileName, job.text, []);
+  const hasMissingFields = parsed.missingFields.length > 0;
+
+  return {
+    marketplace: parsed.marketplace.toLowerCase().replace(" ", "-"),
+    orderId: parsed.orderId,
+    customerName: parsed.customerName,
+    items: parsed.items,
+    quantity: parsed.items.reduce((sum, item) => sum + item.quantity, 0),
+    address: parsed.address,
+    total: parsed.total,
+    confidence: hasMissingFields ? 62 : 88,
+    missingFields: parsed.missingFields,
+    rawNotes: hasMissingFields
+      ? "Gemini พบข้อมูลที่ต้องตรวจทานก่อนบันทึก"
+      : "Gemini แยกข้อมูลจาก PDF เรียบร้อย",
+  };
+}
+
 function formatItems(order: ProcessedOrder) {
   if (order.items.length === 0) return "-";
 
   return order.items
     .map((item) => `${item.name} x${item.quantity || "-"}`)
     .join(", ");
+}
+
+function formatConfidence(confidence?: number) {
+  return typeof confidence === "number" ? `${confidence}%` : "ไม่ระบุ";
 }
 
 function wait(ms: number) {

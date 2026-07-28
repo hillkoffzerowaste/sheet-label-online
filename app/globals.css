@@ -352,6 +352,28 @@ button {
   overflow-wrap: anywhere;
 }
 
+.ai-meta {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #cfe5e2;
+  border-radius: 8px;
+  background: #f1f8f7;
+}
+
+.ai-meta-label {
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ai-meta-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .empty-state,
 .table-empty {
   color: var(--muted);

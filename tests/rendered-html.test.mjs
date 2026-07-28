@@ -35,6 +35,8 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /รับ PDF คำสั่งซื้อ/);
   assert.match(html, /อัปโหลด PDF/);
   assert.match(html, /Google Drive/);
+  assert.match(html, /Gemini/);
+  assert.match(html, /ความมั่นใจ/);
   assert.match(html, /ตรวจ Order ID ซ้ำ/);
   assert.match(html, /ข้อมูลครบ/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
