@@ -58,6 +58,8 @@ GEMINI_API_KEY=your-gemini-api-key
 GEMINI_MODEL=gemini-2.5-flash
 ```
 
+ใน Apps Script editor ให้สร้าง installable **time-driven trigger** ที่เรียก `processInputFolder` ทุก 10 นาที. Trigger นี้เป็นผู้เริ่มการสแกน Drive อัตโนมัติ; Web App ไม่ได้เริ่มการประมวลผลเอง.
+
 Apps Script จะเพิ่มแท็บ `Shipping Labels` เมื่อต้องเขียนผลครั้งแรก โดยมีคอลัมน์:
 
 ```text
