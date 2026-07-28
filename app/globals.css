@@ -127,6 +127,72 @@ button {
   text-decoration: none;
 }
 
+.file-picker-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-picker-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.pdf-selection-notice {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid #b8d7d3;
+  border-radius: 8px;
+  background: #f1f8f7;
+}
+
+.pdf-selection-notice strong {
+  color: var(--accent-strong);
+}
+
+.pdf-selection-notice p {
+  max-width: 680px;
+  margin: 5px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.pdf-selection-list {
+  display: grid;
+  gap: 5px;
+  min-width: min(330px, 100%);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pdf-selection-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 9px;
+  border: 1px solid #d8e9e6;
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 13px;
+}
+
+.pdf-selection-list span {
+  overflow-wrap: anywhere;
+}
+
+.pdf-selection-list small {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -497,6 +563,14 @@ tbody tr.selected {
     display: grid;
   }
 
+  .pdf-selection-notice {
+    flex-direction: column;
+  }
+
+  .pdf-selection-list {
+    width: 100%;
+  }
+
   .summary-strip {
     display: grid;
   }
@@ -611,6 +685,13 @@ tbody tr.selected {
 }
 
 .tracking-cell {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.copy-inline {
   display: flex;
   align-items: center;
   flex-wrap: wrap;

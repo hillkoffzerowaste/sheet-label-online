@@ -40,6 +40,10 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /ตรวจ Order ID ซ้ำ/);
   assert.match(html, /ข้อมูลครบ/);
   assert.match(html, /Go to Sheet/);
+  assert.match(html, /เลือกไฟล์ PDF/);
+  assert.match(html, /Go to Drive/);
+  assert.match(html, /คัดลอกชื่อ/);
+  assert.match(html, /คัดลอกที่อยู่/);
   assert.match(html, /Marketplace/);
   assert.match(html, /ชื่อผู้รับ/);
   assert.match(html, /ที่อยู่จัดส่ง/);

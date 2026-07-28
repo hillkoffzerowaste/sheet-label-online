@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { type ChangeEvent, useMemo, useState } from "react";
 import { getDestinationSheetUrl } from "../src/destination-sheet";
+import { formatFileSize, getInputDriveUrl, isPdfFile } from "../src/pdf-intake";
 import {
   type Marketplace,
   type MarketplaceFilter,
@@ -71,10 +72,13 @@ export default function Home() {
   const destinationSheetUrl = getDestinationSheetUrl(
     process.env.NEXT_PUBLIC_DESTINATION_SHEET_URL,
   );
+  const inputDriveUrl = getInputDriveUrl(process.env.NEXT_PUBLIC_INPUT_DRIVE_URL);
   const [labelQuery, setLabelQuery] = useState("");
   const [marketplaceFilter, setMarketplaceFilter] = useState<MarketplaceFilter>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "ready" | "review">("all");
-  const [copiedTrackingNumber, setCopiedTrackingNumber] = useState<string | null>(null);
+  const [selectedPdfFiles, setSelectedPdfFiles] = useState<File[]>([]);
+  const [fileSelectionMessage, setFileSelectionMessage] = useState("");
+  const [copiedValue, setCopiedValue] = useState<string | null>(null);
 
   const filteredLabels = useMemo(
     () => filterShippingLabels(sampleShippingLabels, labelQuery, marketplaceFilter, statusFilter),
@@ -94,15 +98,31 @@ export default function Home() {
     [],
   );
 
-  async function copyTrackingNumber(trackingNumber: string) {
-    if (!trackingNumber || !navigator.clipboard) return;
+  function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []);
+    const acceptedFiles = files.filter(isPdfFile);
+    const rejectedFiles = files.filter((file) => !isPdfFile(file));
+
+    setSelectedPdfFiles(acceptedFiles);
+    setFileSelectionMessage(
+      rejectedFiles.length > 0
+        ? `ไม่เพิ่ม ${rejectedFiles.length} ไฟล์ เพราะรองรับเฉพาะ PDF`
+        : acceptedFiles.length > 0
+          ? `เลือกไฟล์ PDF แล้ว ${acceptedFiles.length} ไฟล์`
+          : "ยังไม่ได้เลือกไฟล์ PDF",
+    );
+    event.currentTarget.value = "";
+  }
+
+  async function copyValue(value: string, copiedKey: string) {
+    if (!value || !navigator.clipboard) return;
 
     try {
-      await navigator.clipboard.writeText(trackingNumber);
-      setCopiedTrackingNumber(trackingNumber);
-      window.setTimeout(() => setCopiedTrackingNumber(null), 1600);
+      await navigator.clipboard.writeText(value);
+      setCopiedValue(copiedKey);
+      window.setTimeout(() => setCopiedValue(null), 1600);
     } catch {
-      setCopiedTrackingNumber(null);
+      setCopiedValue(null);
     }
   }
 
@@ -119,6 +139,31 @@ export default function Home() {
           </p>
         </div>
         <div className="topbar-actions">
+          <label className="primary-button file-picker-button">
+            <span>เลือกไฟล์ PDF</span>
+            <input accept="application/pdf,.pdf" multiple onChange={handleFileSelection} type="file" />
+          </label>
+          {inputDriveUrl ? (
+            <a
+              aria-label="Open the Google Drive input folder in a new tab"
+              className="ghost-button sheet-link"
+              href={inputDriveUrl}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Go to Drive
+            </a>
+          ) : (
+            <button
+              aria-label="Google Drive input folder has not been configured"
+              className="ghost-button sheet-link"
+              disabled
+              title="Set NEXT_PUBLIC_INPUT_DRIVE_URL to enable this link"
+              type="button"
+            >
+              Go to Drive
+            </button>
+          )}
           {destinationSheetUrl ? (
             <a
               aria-label="Open the destination Google Sheet in a new tab"
@@ -142,6 +187,25 @@ export default function Home() {
           )}
         </div>
       </header>
+
+      {(selectedPdfFiles.length > 0 || fileSelectionMessage) ? (
+        <section aria-live="polite" className="pdf-selection-notice" role="status">
+          <div>
+            <strong>{fileSelectionMessage}</strong>
+            <p>ไฟล์ยังอยู่ในอุปกรณ์ของคุณ กรุณาอัปโหลดไปยัง Input Folder ใน Google Drive เพื่อให้ Apps Script ประมวลผลอัตโนมัติ</p>
+          </div>
+          {selectedPdfFiles.length > 0 ? (
+            <ul className="pdf-selection-list">
+              {selectedPdfFiles.map((file) => (
+                <li key={`${file.name}-${file.lastModified}`}>
+                  <span>{file.name}</span>
+                  <small>{formatFileSize(file.size)}</small>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="summary-strip" aria-label="ภาพรวมใบปะหน้าจัดส่ง">
         <SummaryTile label="ใบปะหน้าที่พบ" value={summary.total} tone="neutral" />
@@ -221,14 +285,44 @@ export default function Home() {
                       <MarketplaceBadge marketplace={label.marketplace} />
                     </td>
                     <td>
-                      <strong>{label.recipientName || "-"}</strong>
+                      {label.recipientName ? (
+                        <div className="copy-inline">
+                          <strong>{label.recipientName}</strong>
+                          <button
+                            aria-label={`คัดลอกชื่อ ${label.recipientName}`}
+                            className="copy-button"
+                            onClick={() => copyValue(label.recipientName, `name:${label.id}`)}
+                            type="button"
+                          >
+                            {copiedValue === `name:${label.id}` ? "คัดลอกแล้ว" : "คัดลอกชื่อ"}
+                          </button>
+                        </div>
+                      ) : (
+                        <strong>-</strong>
+                      )}
                       {label.status === "review" ? (
                         <span className="review-reasons">
                           ต้องตรวจสอบ: {label.reviewReasons.map((reason) => reviewReasonCopy[reason]).join(", ")}
                         </span>
                       ) : null}
                     </td>
-                    <td>{label.shippingAddress || "-"}</td>
+                    <td>
+                      {label.shippingAddress ? (
+                        <div className="copy-inline">
+                          <span>{label.shippingAddress}</span>
+                          <button
+                            aria-label={`คัดลอกที่อยู่ ${label.shippingAddress}`}
+                            className="copy-button"
+                            onClick={() => copyValue(label.shippingAddress, `address:${label.id}`)}
+                            type="button"
+                          >
+                            {copiedValue === `address:${label.id}` ? "คัดลอกแล้ว" : "คัดลอกที่อยู่"}
+                          </button>
+                        </div>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
                     <td className="identifier-cell">{label.orderId || "-"}</td>
                     <td className="tracking-cell">
                       <code>{label.trackingNumber || "-"}</code>
@@ -236,10 +330,10 @@ export default function Home() {
                         <button
                           aria-label={`คัดลอกเลขพัสดุ ${label.trackingNumber}`}
                           className="copy-button"
-                          onClick={() => copyTrackingNumber(label.trackingNumber)}
+                          onClick={() => copyValue(label.trackingNumber, `tracking:${label.id}`)}
                           type="button"
                         >
-                          {copiedTrackingNumber === label.trackingNumber ? "คัดลอกแล้ว" : "คัดลอกเลขพัสดุ"}
+                          {copiedValue === `tracking:${label.id}` ? "คัดลอกแล้ว" : "คัดลอกเลขพัสดุ"}
                         </button>
                       ) : null}
                     </td>
