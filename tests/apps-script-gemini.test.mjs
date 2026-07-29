@@ -28,6 +28,41 @@ async function loadHelpers() {
   return context;
 }
 
+test("creates a shipping-label sheet name from the processing date", async () => {
+  const context = await loadHelpers();
+  context.Session = {
+    getScriptTimeZone: () => "Asia/Bangkok",
+  };
+  context.Utilities = {
+    formatDate: (date, timeZone, pattern) => {
+      assert.equal(date.toISOString(), "2026-07-29T02:00:00.000Z");
+      assert.equal(timeZone, "Asia/Bangkok");
+      assert.equal(pattern, "yyyy-MM-dd");
+      return "2026-07-29";
+    },
+  };
+
+  assert.equal(
+    context.getShippingLabelsSheetName_(new Date("2026-07-29T02:00:00.000Z")),
+    "2026-07-29",
+  );
+});
+
+test("hides only older dated shipping-label sheets", async () => {
+  const context = await loadHelpers();
+  const hidden = [];
+  const sheets = [
+    { getName: () => "2026-07-28", hideSheet: () => hidden.push("2026-07-28") },
+    { getName: () => "2026-07-29", hideSheet: () => hidden.push("2026-07-29") },
+    { getName: () => "2026-07-30", hideSheet: () => hidden.push("2026-07-30") },
+    { getName: () => "Orders", hideSheet: () => hidden.push("Orders") },
+  ];
+
+  context.hideOlderShippingLabelSheets_({ getSheets: () => sheets }, "2026-07-29");
+
+  assert.deepEqual(hidden, ["2026-07-28"]);
+});
+
 test("normalizes a complete Gemini extraction before classifying it", async () => {
   const context = await loadHelpers();
   const order = context.normalizeGeminiOrder_({

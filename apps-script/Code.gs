@@ -16,6 +16,7 @@ const SHIPPING_LABEL_HEADERS = [
   "Review Reasons",
   "File URL",
 ];
+const SHIPPING_LABEL_DATE_SHEET_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
 const GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_MIN_CONFIDENCE = 70;
@@ -859,11 +860,10 @@ function duplicateShippingLabelValues_(labels, fieldName) {
 
 function writeShippingLabels_(labels, fileUrl) {
   try {
-    const sheet = getShippingLabelsSheet_();
+    const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+    const sheet = getShippingLabelsSheet_(new Date(), spreadsheet);
     const lastRow = sheet.getLastRow();
-    const existingRows = lastRow > 1
-      ? sheet.getRange(2, 1, lastRow - 1, SHIPPING_LABEL_HEADERS.length).getValues()
-      : [];
+    const existingRows = getExistingShippingLabelRows_(spreadsheet);
     const newLabels = filterNewShippingLabels_(labels, existingRows);
     const rows = newLabels.map(function (label) {
       return [
@@ -928,10 +928,15 @@ function shippingLabelRowKey_(fileName, orderId, trackingNumber, recipientName, 
     .join("\u001f");
 }
 
-function getShippingLabelsSheet_() {
-  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  let sheet = spreadsheet.getSheetByName(SHIPPING_LABELS_SHEET_NAME);
-  if (!sheet) sheet = spreadsheet.insertSheet(SHIPPING_LABELS_SHEET_NAME);
+function getShippingLabelsSheet_(date, spreadsheet) {
+  const workbook = spreadsheet || SpreadsheetApp.openById(SPREADSHEET_ID);
+  const sheetName = getShippingLabelsSheetName_(date || new Date());
+  let sheet = workbook.getSheetByName(sheetName);
+  if (!sheet) sheet = workbook.insertSheet(sheetName);
+
+  if (typeof sheet.isSheetHidden === "function" && sheet.isSheetHidden()) {
+    sheet.showSheet();
+  }
 
   if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, SHIPPING_LABEL_HEADERS.length).setValues([
@@ -940,7 +945,57 @@ function getShippingLabelsSheet_() {
     sheet.setFrozenRows(1);
   }
 
+  hideOlderShippingLabelSheets_(workbook, sheetName);
   return sheet;
+}
+
+function getShippingLabelsSheetName_(date) {
+  const timeZone =
+    typeof Session !== "undefined" && Session.getScriptTimeZone
+      ? Session.getScriptTimeZone() || "Asia/Bangkok"
+      : "Asia/Bangkok";
+  return Utilities.formatDate(date || new Date(), timeZone, "yyyy-MM-dd");
+}
+
+function getExistingShippingLabelRows_(spreadsheet) {
+  return spreadsheet.getSheets().reduce(function (rows, sheet) {
+    const name = sheet.getName();
+    if (
+      name !== SHIPPING_LABELS_SHEET_NAME &&
+      !SHIPPING_LABEL_DATE_SHEET_PATTERN.test(name)
+    ) {
+      return rows;
+    }
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow > 1) {
+      rows.push(
+        ...sheet
+          .getRange(2, 1, lastRow - 1, SHIPPING_LABEL_HEADERS.length)
+          .getValues(),
+      );
+    }
+    return rows;
+  }, []);
+}
+
+function hideOlderShippingLabelSheets_(spreadsheet, currentSheetName) {
+  spreadsheet.getSheets().forEach(function (sheet) {
+    const name = sheet.getName();
+    if (
+      !SHIPPING_LABEL_DATE_SHEET_PATTERN.test(name) ||
+      name >= currentSheetName
+    ) {
+      return;
+    }
+
+    if (
+      typeof sheet.isSheetHidden !== "function" ||
+      !sheet.isSheetHidden()
+    ) {
+      sheet.hideSheet();
+    }
+  });
 }
 
 function stringValue_(value) {
