@@ -385,7 +385,7 @@ function extractOrderWithGemini_(file) {
 
 function extractShippingLabelsWithGemini_(file) {
   if (file.getMimeType() !== MimeType.PDF) {
-    throw createProcessingError_("GeminiResponseError", "เธเธฒเธเธ•เธเนเธญเธเน€เธเนเธ PDF", false);
+    throw createProcessingError_("GeminiResponseError", "ไฟล์ต้องเป็น PDF", false);
   }
 
   const config = getGeminiConfig_();
@@ -420,25 +420,35 @@ function extractShippingLabelsWithGemini_(file) {
       muteHttpExceptions: true,
     });
   } catch (error) {
-    throw createProcessingError_("GeminiTransportError", "เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เน€เธเธทเนเธญเธกเธ•เนเธญ Gemini เน€เธเธทเนเธญเธญเนเธฒเธเนเธเธเธฐเธซเธเนเธฒ", true);
+    throw createProcessingError_("GeminiTransportError", "ไม่สามารถเชื่อมต่อ Gemini ได้", true);
   }
 
   const status = response.getResponseCode();
   if (status < 200 || status >= 300) {
-    throw createProcessingError_("GeminiTransportError", "Gemini เธ•เธญเธเธเธฅเธฑเธเธ”เนเธงเธข HTTP " + status, true);
+    throw createProcessingError_("GeminiTransportError", "Gemini ตอบกลับด้วย HTTP " + status, true);
   }
 
   let body;
-  let raw;
   try {
     body = JSON.parse(response.getContentText());
-    raw = JSON.parse(getGeminiResponseText_(body));
   } catch (error) {
-    throw createProcessingError_("GeminiResponseError", "Gemini เธชเนเธ JSON เนเธเธเธฐเธซเธเนเธฒเธ—เธตเนเนเธกเนเธ–เธนเธเธ•เนเธญเธ", false);
+    throw createProcessingError_("GeminiTransportError", "Gemini ส่ง response ที่อ่านไม่ได้", true);
+  }
+
+  const text = getGeminiResponseText_(body);
+  if (!text) {
+    throw createProcessingError_("GeminiTransportError", "Gemini ไม่ส่งข้อมูลใบปะหน้ากลับมา", true);
+  }
+
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    throw createProcessingError_("GeminiResponseError", "Gemini ส่ง JSON ใบปะหน้าที่ไม่ถูกต้อง", false);
   }
 
   if (!Array.isArray(raw)) {
-    throw createProcessingError_("GeminiResponseError", "Gemini เธชเนเธเธเธฅเธฅเธฑเธเธเนเนเธเธเธฐเธซเธเนเธฒเน€เธเนเธรูปแบบเนเธกเนเธ–เธนเธเธ•เนเธญเธ", false);
+    throw createProcessingError_("GeminiResponseError", "Gemini ส่งผลลัพธ์ใบปะหน้าเป็นรูปแบบที่ไม่ถูกต้อง", false);
   }
 
   return raw;
@@ -832,7 +842,7 @@ function writeShippingLabels_(labels, fileUrl) {
   } catch (error) {
     throw createProcessingError_(
       "SheetWriteError",
-      "เนเธกเนเธชเธฒเธกเธฒเธฃเธ–เธเธฑเธเธ—เธถเธเนเธเธเธฐเธซเธเนเธฒเธฅเธ Google Sheet เนเธ”เน",
+      "ไม่สามารถบันทึกใบปะหน้าลง Google Sheet ได้",
       true,
     );
   }

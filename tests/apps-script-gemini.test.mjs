@@ -205,6 +205,77 @@ test("creates a review row when Gemini returns no shipping labels", async () => 
   assert.ok(labels[0].reviewReasons.includes("trackingNumber"));
 });
 
+test("classifies unparseable Gemini body during label extraction as retryable transport error", async () => {
+  const context = await loadHelpers();
+  const mockResponse = {
+    getResponseCode: () => 200,
+    getContentText: () => "not-valid-json",
+  };
+  context.UrlFetchApp = { fetch: () => mockResponse };
+  context.PropertiesService = {
+    getScriptProperties: () => ({
+      getProperty: (key) => (key === "GEMINI_API_KEY" ? "test-key" : null),
+    }),
+  };
+  context.MimeType = { PDF: "application/pdf" };
+  context.Utilities = { base64Encode: () => "" };
+
+  const file = {
+    getMimeType: () => "application/pdf",
+    getBlob: () => ({ getBytes: () => [] }),
+  };
+
+  let caught;
+  try {
+    context.extractShippingLabelsWithGemini_(file);
+  } catch (err) {
+    caught = err;
+  }
+
+  assert.ok(caught, "extractShippingLabelsWithGemini_ must throw on unparseable body");
+  assert.equal(
+    caught.retryable,
+    true,
+    "body parse failure is a transport error and must be retryable",
+  );
+});
+
+test("classifies empty Gemini response text during label extraction as retryable transport error", async () => {
+  const context = await loadHelpers();
+  const emptyBody = { candidates: [] };
+  const mockResponse = {
+    getResponseCode: () => 200,
+    getContentText: () => JSON.stringify(emptyBody),
+  };
+  context.UrlFetchApp = { fetch: () => mockResponse };
+  context.PropertiesService = {
+    getScriptProperties: () => ({
+      getProperty: (key) => (key === "GEMINI_API_KEY" ? "test-key" : null),
+    }),
+  };
+  context.MimeType = { PDF: "application/pdf" };
+  context.Utilities = { base64Encode: () => "" };
+
+  const file = {
+    getMimeType: () => "application/pdf",
+    getBlob: () => ({ getBytes: () => [] }),
+  };
+
+  let caught;
+  try {
+    context.extractShippingLabelsWithGemini_(file);
+  } catch (err) {
+    caught = err;
+  }
+
+  assert.ok(caught, "extractShippingLabelsWithGemini_ must throw when Gemini returns no text");
+  assert.equal(
+    caught.retryable,
+    true,
+    "empty Gemini response is a transport error and must be retryable",
+  );
+});
+
 test("filters shipping label rows already exported for the same file", async () => {
   const context = await loadHelpers();
   const labels = context.normalizeShippingLabels_("fixture.pdf", [
