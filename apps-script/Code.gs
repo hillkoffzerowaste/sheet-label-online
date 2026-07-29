@@ -16,7 +16,7 @@ const SHIPPING_LABEL_HEADERS = [
   "Review Reasons",
   "File URL",
 ];
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
 const GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_MIN_CONFIDENCE = 70;
 
