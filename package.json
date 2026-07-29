@@ -9,7 +9,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run test:workflow && node --test tests/apps-script-gemini.test.mjs && npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "npm run test:workflow && node --test tests/apps-script-gemini.test.mjs && npm run build && node --test tests/no-sample-data.test.mjs && node --test tests/rendered-html.test.mjs",
     "test:workflow": "node --import tsx --test src/workflow.test.ts src/destination-sheet.test.ts src/shipping-label.test.ts src/pdf-intake.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },

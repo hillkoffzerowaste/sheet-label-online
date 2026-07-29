@@ -11,52 +11,8 @@ import {
   filterShippingLabels,
 } from "../src/shipping-label";
 
-const sampleShippingLabels: ShippingLabel[] = [
-  {
-    id: "sample-shopee-1",
-    sourceFileName: "Shopee_SPX.pdf",
-    marketplace: "Shopee",
-    recipientName: "มาลี ตัวอย่าง",
-    shippingAddress: "ถนนทดสอบ กรุงเทพฯ 10110",
-    orderId: "260728AAA111",
-    trackingNumber: "TH100000000001A",
-    status: "ready",
-    reviewReasons: [],
-  },
-  {
-    id: "sample-lazada-1",
-    sourceFileName: "Lazada_LEX.pdf",
-    marketplace: "Lazada",
-    recipientName: "อรุณ ตัวอย่าง",
-    shippingAddress: "อำเภอเมือง เชียงใหม่ 50000",
-    orderId: "LZD-1001",
-    trackingNumber: "LEXTH0001",
-    status: "ready",
-    reviewReasons: [],
-  },
-  {
-    id: "sample-tiktok-1",
-    sourceFileName: "TikTok_TTS.pdf",
-    marketplace: "TikTok Shop",
-    recipientName: "พลอย ตัวอย่าง",
-    shippingAddress: "อำเภอเมือง ภูเก็ต 83000",
-    orderId: "TTS-1001",
-    trackingNumber: "TTS-TRACK-1",
-    status: "review",
-    reviewReasons: ["duplicateTrackingNumber"],
-  },
-  {
-    id: "sample-unknown-1",
-    sourceFileName: "unreadable-label.pdf",
-    marketplace: "Unknown",
-    recipientName: "",
-    shippingAddress: "",
-    orderId: "",
-    trackingNumber: "",
-    status: "review",
-    reviewReasons: ["marketplace", "recipientName", "shippingAddress", "orderId", "trackingNumber"],
-  },
-];
+/** Labels written by Apps Script to the Google Sheet; empty until data arrives. */
+const shippingLabels: ShippingLabel[] = [];
 
 const reviewReasonCopy: Record<ReviewReason, string> = {
   marketplace: "ไม่พบ Marketplace",
@@ -81,16 +37,16 @@ export default function Home() {
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
 
   const filteredLabels = useMemo(
-    () => filterShippingLabels(sampleShippingLabels, labelQuery, marketplaceFilter, statusFilter),
+    () => filterShippingLabels(shippingLabels, labelQuery, marketplaceFilter, statusFilter),
     [labelQuery, marketplaceFilter, statusFilter],
   );
   const summary = useMemo(
     () => ({
-      total: sampleShippingLabels.length,
-      ready: sampleShippingLabels.filter((label) => label.status === "ready").length,
-      review: sampleShippingLabels.filter((label) => label.status === "review").length,
+      total: shippingLabels.length,
+      ready: shippingLabels.filter((label) => label.status === "ready").length,
+      review: shippingLabels.filter((label) => label.status === "review").length,
       marketplaces: new Set(
-        sampleShippingLabels
+        shippingLabels
           .filter((label) => label.marketplace !== "Unknown")
           .map((label) => label.marketplace),
       ).size,
@@ -275,7 +231,9 @@ export default function Home() {
               {filteredLabels.length === 0 ? (
                 <tr>
                   <td className="table-empty" colSpan={5}>
-                    ไม่พบรายการที่ตรงกับตัวกรอง
+                    {shippingLabels.length === 0
+                      ? "ยังไม่มีข้อมูลใบปะหน้า Apps Script จะเขียนข้อมูลลง Google Sheet อัตโนมัติเมื่อประมวลผล PDF"
+                      : "ไม่พบรายการที่ตรงกับตัวกรอง"}
                   </td>
                 </tr>
               ) : (

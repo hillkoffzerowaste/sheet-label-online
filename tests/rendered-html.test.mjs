@@ -42,8 +42,6 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /Go to Sheet/);
   assert.match(html, /เลือกไฟล์ PDF/);
   assert.match(html, /Go to Drive/);
-  assert.match(html, /คัดลอกชื่อ/);
-  assert.match(html, /คัดลอกที่อยู่/);
   assert.match(html, /Marketplace/);
   assert.match(html, /ชื่อผู้รับ/);
   assert.match(html, /ที่อยู่จัดส่ง/);
@@ -53,7 +51,7 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /Lazada/);
   assert.match(html, /TikTok Shop/);
   assert.match(html, /ค้นหารายการ/);
-  assert.match(html, /คัดลอกเลขพัสดุ/);
+  assert.match(html, /ยังไม่มีข้อมูลใบปะหน้า/);
   assert.match(html, /href="https:\/\/docs\.google\.com\/spreadsheets\/d\//);
   assert.match(html, /href="https:\/\/drive\.google\.com\/drive\/u\/0\/folders\//);
   assert.doesNotMatch(html, /<button[^>]*disabled[^>]*>Go to Sheet<\/button>/);
