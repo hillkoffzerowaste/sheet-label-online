@@ -109,3 +109,137 @@ test("normalizes shipping labels and marks duplicate orders for review", async (
   assert.ok(labels.every((label) => label.status === "review"));
   assert.ok(labels[0].reviewReasons.includes("duplicateOrderId"));
 });
+
+test("gives Gemini the Shopee SPX visual extraction anchors", async () => {
+  const source = await readFile(codeUrl, "utf8");
+
+  assert.match(source, /two physical labels/);
+  assert.match(source, /ผู้รับ \(TO\)/);
+  assert.match(source, /ผู้ส่ง \(FROM\)/);
+  assert.match(source, /below the top barcode/);
+  assert.match(source, /Read the PDF visually/);
+  assert.match(source, /one A5 page normally contains one physical label/);
+  assert.match(source, /marked ถึง/);
+  assert.match(source, /marked จาก/);
+  assert.match(source, /beginning with JTTH/);
+  assert.match(source, /Lazada LEX/);
+  assert.match(source, /after Receiver:/);
+  assert.match(source, /Seller Name/);
+  assert.match(source, /standalone LEX logo text/);
+});
+
+test("exports shipping labels even when order extraction fails", async () => {
+  const context = await loadHelpers();
+  const file = {
+    getName: () => "fixture.pdf",
+    getUrl: () => "https://drive.google.com/file/d/fixture/view",
+  };
+  let exportedLabels = [];
+  let movedToProcessed = false;
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractShippingLabelsWithGemini_ = () => [
+    {
+      marketplace: "shopee",
+      recipientName: "Mali Demo",
+      shippingAddress: "Bangkok 10110",
+      orderId: "260728AAA111",
+      trackingNumber: "TH100000000001A",
+    },
+  ];
+  context.writeShippingLabels_ = (labels) => {
+    exportedLabels = labels;
+  };
+  context.extractOrderWithGemini_ = () => {
+    throw new Error("order extraction failed");
+  };
+  context.writeOrderResult_ = () => {};
+  context.moveToProcessed = () => {
+    movedToProcessed = true;
+  };
+
+  const result = context.processDriveFile("fixture-id");
+
+  assert.equal(result.status, "failed");
+  assert.equal(exportedLabels.length, 1);
+  assert.equal(exportedLabels[0].orderId, "260728AAA111");
+  assert.equal(movedToProcessed, true);
+});
+
+test("writes a review shipping row when label extraction is malformed", async () => {
+  const context = await loadHelpers();
+  const file = {
+    getName: () => "malformed.pdf",
+    getUrl: () => "https://drive.google.com/file/d/malformed/view",
+  };
+  let exportedLabels = [];
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractShippingLabelsWithGemini_ = () => {
+    throw new Error("malformed Gemini label response");
+  };
+  context.writeShippingLabels_ = (labels) => {
+    exportedLabels = labels;
+  };
+  context.extractOrderWithGemini_ = () => {
+    throw new Error("order extraction failed");
+  };
+  context.writeOrderResult_ = () => {};
+  context.moveToProcessed = () => {};
+
+  const result = context.processDriveFile("malformed-id");
+
+  assert.equal(result.status, "failed");
+  assert.equal(exportedLabels.length, 1);
+  assert.equal(exportedLabels[0].status, "review");
+  assert.equal(exportedLabels[0].sourceFileName, "malformed.pdf");
+});
+
+test("creates a review row when Gemini returns no shipping labels", async () => {
+  const context = await loadHelpers();
+  const labels = context.prepareShippingLabelsForExport_("empty.pdf", []);
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].marketplace, "Unknown");
+  assert.equal(labels[0].status, "review");
+  assert.ok(labels[0].reviewReasons.includes("trackingNumber"));
+});
+
+test("filters shipping label rows already exported for the same file", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("fixture.pdf", [
+    {
+      marketplace: "shopee",
+      recipientName: "Mali Demo",
+      shippingAddress: "Bangkok 10110",
+      orderId: "260728AAA111",
+      trackingNumber: "TH100000000001A",
+    },
+    {
+      marketplace: "lazada",
+      recipientName: "Nara Demo",
+      shippingAddress: "Chiang Mai 50000",
+      orderId: "LZD-2002",
+      trackingNumber: "LEXTH0002",
+    },
+  ]);
+  const existingRows = [
+    [
+      new Date(),
+      "fixture.pdf",
+      "Shopee",
+      "Mali Demo",
+      "Bangkok 10110",
+      "260728AAA111",
+      "TH100000000001A",
+      "ready",
+      "",
+      "https://drive.google.com/file/d/fixture/view",
+    ],
+  ];
+
+  const newLabels = context.filterNewShippingLabels_(labels, existingRows);
+
+  assert.equal(newLabels.length, 1);
+  assert.equal(newLabels[0].marketplace, "Lazada");
+});

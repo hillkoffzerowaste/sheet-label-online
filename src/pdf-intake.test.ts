@@ -9,8 +9,11 @@ test("accepts an HTTPS Google Drive folder URL", () => {
   );
 });
 
-test("rejects missing, non-HTTPS, and non-folder Drive URLs", () => {
-  assert.equal(getInputDriveUrl(undefined), null);
+test("uses the configured input folder when no environment value is present", () => {
+  assert.match(getInputDriveUrl(undefined) ?? "", /drive\.google\.com\/drive\/.*folders\//);
+});
+
+test("rejects non-HTTPS and non-folder Drive URLs", () => {
   assert.equal(getInputDriveUrl("http://drive.google.com/drive/folders/folder-1"), null);
   assert.equal(getInputDriveUrl("https://drive.google.com/drive/my-drive"), null);
 });

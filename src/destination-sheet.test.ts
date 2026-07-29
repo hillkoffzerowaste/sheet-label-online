@@ -9,8 +9,11 @@ test("accepts an HTTPS Google Sheets document URL", () => {
   );
 });
 
-test("rejects missing, non-HTTPS, and non-Sheets URLs", () => {
-  assert.equal(getDestinationSheetUrl(undefined), null);
+test("uses the configured destination sheet when no environment value is present", () => {
+  assert.match(getDestinationSheetUrl(undefined) ?? "", /docs\.google\.com\/spreadsheets\/d\//);
+});
+
+test("rejects non-HTTPS and non-Sheets URLs", () => {
   assert.equal(getDestinationSheetUrl("http://docs.google.com/spreadsheets/d/sheet-1"), null);
   assert.equal(getDestinationSheetUrl("https://example.com/spreadsheets/d/sheet-1"), null);
 });

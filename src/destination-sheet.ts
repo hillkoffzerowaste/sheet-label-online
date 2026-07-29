@@ -1,8 +1,11 @@
+export const DEFAULT_DESTINATION_SHEET_URL =
+  "https://docs.google.com/spreadsheets/d/1iXza5MJJIo1JaMIPNH8o-ReJU4nEoHHNn5JfT6fv2TU/edit?usp=sharing";
+
 export function getDestinationSheetUrl(value: string | undefined): string | null {
-  if (!value) return null;
+  const candidate = value || DEFAULT_DESTINATION_SHEET_URL;
 
   try {
-    const url = new URL(value);
+    const url = new URL(candidate);
     const hasDocumentId = /^\/spreadsheets\/d\/[^/]+/.test(url.pathname);
 
     if (

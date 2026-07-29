@@ -1,13 +1,16 @@
+export const DEFAULT_INPUT_DRIVE_URL =
+  "https://drive.google.com/drive/u/0/folders/1w_qEAjYeZFTmENeoFyjGVRX3syTNB2v5";
+
 export type FileLike = {
   name: string;
   type: string;
 };
 
 export function getInputDriveUrl(value: string | undefined): string | null {
-  if (!value) return null;
+  const candidate = value || DEFAULT_INPUT_DRIVE_URL;
 
   try {
-    const url = new URL(value);
+    const url = new URL(candidate);
     const isDriveFolder = /\/folders\/[^/]+/.test(url.pathname);
 
     if (url.protocol !== "https:" || url.hostname !== "drive.google.com" || !isDriveFolder) {

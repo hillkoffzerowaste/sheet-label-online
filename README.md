@@ -71,15 +71,19 @@ Order ID, Tracking Number, Status, Review Reasons, File URL
 
 ## Go to Sheet
 
+The app includes the configured public destination Sheet URL as a fallback, so `Go to Sheet` remains usable even when the Vercel environment variable has not been added yet. Set `NEXT_PUBLIC_DESTINATION_SHEET_URL` to override it for another deployment.
+
 กำหนด Vercel environment variable นี้เป็น URL ของ spreadsheet ปลายทาง:
 
 ```bash
 NEXT_PUBLIC_DESTINATION_SHEET_URL=https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit
 ```
 
-ปุ่ม `Go to Sheet` จะแสดงเสมอ. เมื่อ URL ถูกต้อง ปุ่มจะเปิดชีตในแท็บใหม่; เมื่อยังไม่ตั้งค่าหรือ URL ไม่ถูกต้อง ปุ่มจะถูกปิดใช้งาน. ค่านี้เป็น URL สาธารณะ ไม่ใช่ API key และสิทธิ์เข้าถึงยังควบคุมด้วย Google sharing settings.
+ปุ่ม `Go to Sheet` จะแสดงเสมอและเปิดชีตในแท็บใหม่. หากกำหนด environment variable จะใช้ค่านั้น; หากไม่กำหนดจะใช้ URL ปลายทางที่ตั้งไว้ในระบบ. ค่านี้เป็น URL สาธารณะ ไม่ใช่ API key และสิทธิ์เข้าถึงยังควบคุมด้วย Google sharing settings.
 
 ## Go to Drive and PDF selection
+
+The app also includes the configured public input-folder URL as a fallback, so `Go to Drive` remains usable without a local `.env` file. Set `NEXT_PUBLIC_INPUT_DRIVE_URL` to override it for another deployment.
 
 กำหนด Vercel environment variable นี้เป็น URL ของ Google Drive input folder ที่ Apps Script เฝ้าดู:
 

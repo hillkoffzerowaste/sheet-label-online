@@ -73,6 +73,23 @@ const SHIPPING_LABEL_EXTRACTION_PROMPT = [
   "Return one object per label, even when a page contains more than one label.",
   "Never guess: use an empty string when a value is not printed on the label.",
   "marketplace must be shopee, lazada, tiktok-shop, or unknown.",
+  "For Shopee SPX labels, each Letter page may contain two physical labels.",
+  "Use the visual label boundaries and return exactly one object for each physical label.",
+  "For Shopee SPX, recipientName is the name in the recipient section marked ผู้รับ (TO).",
+  "For Shopee SPX, shippingAddress is the recipient address directly below that name; never use the sender section marked ผู้ส่ง (FROM).",
+  "For Shopee SPX, orderId is the value after Shopee Order No. (the same order may be repeated in the item table).",
+  "For Shopee SPX, trackingNumber is the alphanumeric value printed below the top barcode, usually beginning with TH; do not use route, shelf, or pickup codes.",
+  "Read the PDF visually when extracted text is in column order or mixes the sender and recipient lines.",
+  "For TikTok Shop J&T labels, one A5 page normally contains one physical label with TikTok Shop and J&T Express branding.",
+  "For TikTok Shop J&T, recipientName is the name in the section marked ถึง; shippingAddress is the large address block below it.",
+  "For TikTok Shop J&T, never use the sender section marked จาก as the recipient name or address.",
+  "For TikTok Shop J&T, orderId is the numeric value after Order ID: at the bottom of the label.",
+  "For TikTok Shop J&T, trackingNumber is the value below the top barcode, often beginning with JTTH; ignore repeated vertical barcode text and routing codes.",
+  "For Lazada LEX labels, one page normally contains one physical label with LEX branding.",
+  "For Lazada LEX, recipientName is the name after Receiver: and shippingAddress is the address directly below it before Phone or Sender.",
+  "For Lazada LEX, never use the Sender section or Seller Name as the recipient.",
+  "For Lazada LEX, orderId is the value after LAZADA Order Number: or Order No.:.",
+  "For Lazada LEX, trackingNumber is the complete alphanumeric value below the top barcode, usually beginning with LEX; do not return the standalone LEX logo text.",
 ].join("\\n");
 
 const GEMINI_SHIPPING_LABEL_SCHEMA = {
@@ -130,71 +147,144 @@ function processDriveFile(fileId) {
   const file = DriveApp.getFileById(fileId);
 
   try {
-    const order = extractOrderWithGemini_(file);
-    order.fileName = file.getName();
-    order.fileUrl = file.getUrl();
+    let shippingExport;
+    try {
+      shippingExport = exportShippingLabels_(file);
+    } catch (error) {
+      if (isRetryableError_(error)) throw error;
 
-    const classification = classifyGeminiOrder_(
-      order,
-      Boolean(order.orderId && isDuplicateOrder(order.orderId)),
-    );
-    order.status = classification.status;
-    order.reason = classification.reason;
-    order.missingFields = classification.missingFields;
-
-    writeOrderResult_(order);
-    const shippingLabels = normalizeShippingLabels_(
-      file.getName(),
-      extractShippingLabelsWithGemini_(file),
-    );
-    writeShippingLabels_(shippingLabels, file.getUrl());
-    moveToProcessed(file);
-    return order;
-  } catch (error) {
-    if (isRetryableError_(error)) {
-      console.error("Retryable PDF processing error", {
-        fileId,
-        errorName: error && error.name,
-        message: error && error.message,
-      });
-      return {
-        fileName: file.getName(),
-        fileUrl: file.getUrl(),
-        marketplace: "Unknown",
-        orderId: "",
-        customerName: "",
-        items: [],
-        total: "",
-        address: "",
-        source: "gemini",
-        confidence: 0,
-        missingFields: [],
-        status: "failed",
-        reason: error && error.message ? error.message : "การประมวลผลจะลองใหม่ภายหลัง",
+      const reviewLabels = prepareShippingLabelsForExport_(file.getName(), []);
+      const reviewResult = writeShippingLabels_(reviewLabels, file.getUrl());
+      shippingExport = {
+        inserted:
+          reviewResult && Number.isFinite(reviewResult.inserted)
+            ? reviewResult.inserted
+            : reviewLabels.length,
+        total: reviewLabels.length,
       };
     }
 
-    const order = {
-      fileName: file.getName(),
-      fileUrl: file.getUrl(),
-      marketplace: "Unknown",
-      orderId: "",
-      customerName: "",
-      items: [],
-      total: "",
-      address: "",
-      source: "gemini",
-      confidence: 0,
-      missingFields: [],
-      status: "failed",
-      reason:
-        "Gemini อ่าน PDF ไม่สำเร็จ: " +
-        (error && error.message ? error.message : "ไม่ทราบสาเหตุ"),
-    };
+    try {
+      const order = extractOrderWithGemini_(file);
+      order.fileName = file.getName();
+      order.fileUrl = file.getUrl();
+
+      const classification = classifyGeminiOrder_(
+        order,
+        Boolean(order.orderId && isDuplicateOrder(order.orderId)),
+      );
+      order.status = classification.status;
+      order.reason = classification.reason;
+      order.missingFields = classification.missingFields;
+      order.shippingLabelsExported = shippingExport.inserted;
+
+      writeOrderResult_(order);
+      moveToProcessed(file);
+      return order;
+    } catch (error) {
+      if (isRetryableError_(error)) {
+        return buildRetryableProcessingResult_(file, error, shippingExport.inserted);
+      }
+
+      const order = buildFailedOrder_(file, error);
+      order.shippingLabelsExported = shippingExport.inserted;
+      writeOrderResult_(order);
+      moveToProcessed(file);
+      return order;
+    }
+  } catch (error) {
+    if (isRetryableError_(error)) {
+      return buildRetryableProcessingResult_(file, error, 0);
+    }
+
+    const order = buildFailedOrder_(file, error);
     writeOrderResult_(order);
     moveToProcessed(file);
     return order;
   }
+}
+
+function exportShippingLabels_(file) {
+  const labels = prepareShippingLabelsForExport_(
+    file.getName(),
+    extractShippingLabelsWithGemini_(file),
+  );
+  const result = writeShippingLabels_(labels, file.getUrl());
+
+  return {
+    inserted: result && Number.isFinite(result.inserted) ? result.inserted : labels.length,
+    total: labels.length,
+  };
+}
+
+function prepareShippingLabelsForExport_(fileName, values) {
+  const labels = normalizeShippingLabels_(fileName, values);
+  if (labels.length > 0) return labels;
+
+  return [
+    {
+      id: fileName + "-review",
+      sourceFileName: fileName,
+      marketplace: "Unknown",
+      recipientName: "",
+      shippingAddress: "",
+      orderId: "",
+      trackingNumber: "",
+      status: "review",
+      reviewReasons: [
+        "marketplace",
+        "recipientName",
+        "shippingAddress",
+        "orderId",
+        "trackingNumber",
+      ],
+    },
+  ];
+}
+
+function buildRetryableProcessingResult_(file, error, shippingLabelsExported) {
+  console.error("Retryable PDF processing error", {
+    fileId: file.getId ? file.getId() : "unknown",
+    errorName: error && error.name,
+    message: error && error.message,
+  });
+
+  return {
+    fileName: file.getName(),
+    fileUrl: file.getUrl(),
+    marketplace: "Unknown",
+    orderId: "",
+    customerName: "",
+    items: [],
+    total: "",
+    address: "",
+    source: "gemini",
+    confidence: 0,
+    missingFields: [],
+    shippingLabelsExported,
+    status: "failed",
+    reason: error && error.message ? error.message : "Retryable PDF processing error",
+  };
+}
+
+function buildFailedOrder_(file, error) {
+  return {
+    fileName: file.getName(),
+    fileUrl: file.getUrl(),
+    marketplace: "Unknown",
+    orderId: "",
+    customerName: "",
+    items: [],
+    total: "",
+    address: "",
+    source: "gemini",
+    confidence: 0,
+    missingFields: [],
+    status: "failed",
+    reason:
+      "Gemini อ่าน PDF ไม่สำเร็จ: " +
+      (error && error.message ? error.message : "ไม่ทราบสาเหตุ"),
+  };
 }
 
 function extractOrderWithGemini_(file) {
@@ -709,8 +799,13 @@ function duplicateShippingLabelValues_(labels, fieldName) {
 function writeShippingLabels_(labels, fileUrl) {
   try {
     const sheet = getShippingLabelsSheet_();
-    labels.forEach(function (label) {
-      sheet.appendRow([
+    const lastRow = sheet.getLastRow();
+    const existingRows = lastRow > 1
+      ? sheet.getRange(2, 1, lastRow - 1, SHIPPING_LABEL_HEADERS.length).getValues()
+      : [];
+    const newLabels = filterNewShippingLabels_(labels, existingRows);
+    const rows = newLabels.map(function (label) {
+      return [
         new Date(),
         label.sourceFileName,
         label.marketplace,
@@ -721,8 +816,19 @@ function writeShippingLabels_(labels, fileUrl) {
         label.status,
         label.reviewReasons.join(", "),
         fileUrl,
-      ]);
+      ];
     });
+
+    if (rows.length > 0) {
+      sheet
+        .getRange(lastRow + 1, 1, rows.length, SHIPPING_LABEL_HEADERS.length)
+        .setValues(rows);
+    }
+
+    return {
+      inserted: rows.length,
+      skipped: labels.length - rows.length,
+    };
   } catch (error) {
     throw createProcessingError_(
       "SheetWriteError",
@@ -730,6 +836,35 @@ function writeShippingLabels_(labels, fileUrl) {
       true,
     );
   }
+}
+
+function filterNewShippingLabels_(labels, existingRows) {
+  const existingKeys = {};
+  (existingRows || []).forEach(function (row) {
+    existingKeys[
+      shippingLabelRowKey_(row[1], row[5], row[6], row[3], row[4])
+    ] = true;
+  });
+
+  return (labels || []).filter(function (label) {
+    const key = shippingLabelRowKey_(
+      label.sourceFileName,
+      label.orderId,
+      label.trackingNumber,
+      label.recipientName,
+      label.shippingAddress,
+    );
+    if (existingKeys[key]) return false;
+
+    existingKeys[key] = true;
+    return true;
+  });
+}
+
+function shippingLabelRowKey_(fileName, orderId, trackingNumber, recipientName, shippingAddress) {
+  return [fileName, orderId, trackingNumber, recipientName, shippingAddress]
+    .map(stringValue_)
+    .join("\u001f");
 }
 
 function getShippingLabelsSheet_() {

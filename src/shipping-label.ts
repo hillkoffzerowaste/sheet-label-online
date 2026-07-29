@@ -96,7 +96,7 @@ function splitLabelSegments(text: string): string[] {
 function parseShippingLabel(fileName: string, text: string, index: number): ShippingLabel {
   const marketplace = detectMarketplace(text);
   const recipientName = extractRecipient(text, marketplace);
-  const shippingAddress = extractAddress(text);
+  const shippingAddress = extractAddress(text, marketplace);
   const orderId = extractOrderId(text, marketplace);
   const trackingNumber = extractTrackingNumber(text, marketplace);
   const reviewReasons = getReviewReasons({
@@ -145,20 +145,104 @@ function extractTrackingNumber(text: string, marketplace: Marketplace): string {
     return capture(text, /\b(TH\d{8,}[A-Z])\b/i);
   }
 
+  if (marketplace === "TikTok Shop") {
+    return capture(text, /\b(JTTH[A-Z0-9-]+)\b/i);
+  }
+
+  if (marketplace === "Lazada") {
+    return capture(text, /\b(LEX[A-Z0-9-]{6,})\b/i);
+  }
+
   return capture(text, /\b((?:LEX|TTS)[A-Z0-9-]+)\b/i);
 }
 
 function extractRecipient(text: string, marketplace: Marketplace): string {
   if (marketplace === "Shopee") {
-    return capture(text, /ผู้รับ\s*\(TO\)\s*(.*?)(?=\s+Address:|\s+เลขที่|\s+Shopee\s+Order\s+No|$)/i);
+    const inlineRecipient = capture(
+      text,
+      /ผู้รับ\s*\(TO\)\s*(.*?)(?=\s+Address:|\s+เลขที่|\s+Shopee\s+Order\s+No|$)/i,
+    );
+    if (inlineRecipient && !inlineRecipient.includes("\n")) return inlineRecipient;
+
+    return getShopeeRecipientBlock(text).split(/\r?\n/)[0]?.trim() ?? "";
+  }
+  if (marketplace === "TikTok Shop") {
+    return getTikTokRecipientBlock(text).split(/\r?\n/)[0]?.trim() ?? "";
+  }
+  if (marketplace === "Lazada") {
+    return getLazadaRecipientBlock(text).split(/\r?\n/)[0]?.trim() ?? "";
   }
   return capture(text, /Recipient\s*:?\s*(.*?)(?=\s+Address:|\s+Order\s*(?:Number|No\.?|ID)|$)/i);
 }
 
-function extractAddress(text: string): string {
-  return capture(
+function extractAddress(text: string, marketplace: Marketplace): string {
+  if (marketplace === "Lazada") {
+    const lines = getLazadaRecipientBlock(text)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    return lines.slice(1).join(" ").trim();
+  }
+
+  const explicitAddress = capture(
     text,
     /Address\s*:?\s*(.*?)(?=\s+(?:Shopee\s+Order\s+No|Order\s*(?:Number|No\.?|ID)|Tracking(?:\s+Number|\s+No\.?)?)\b|$)/i,
+  );
+  if (explicitAddress) return explicitAddress;
+
+  if (marketplace === "TikTok Shop") {
+    const lines = getTikTokRecipientBlock(text)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    return lines.slice(1).join(" ").trim();
+  }
+
+  const lines = getShopeeRecipientBlock(text)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return lines.slice(1).join(" ").trim();
+}
+
+function getShopeeRecipientBlock(text: string): string {
+  const marker = /ผู้รับ\s*\(TO\)/i.exec(text);
+  if (!marker) return "";
+
+  const afterMarker = text.slice(marker.index + marker[0].length);
+  return (
+    afterMarker
+      .split(/\r?\n?\s*(?=Shopee\s+Order\s+No\.?|PICKUP\s+DATE|SHIP\s+BY\s+DATE|NOTE\b)/i)[0]
+      ?.replace(/\s*ผู้ส่ง\s*\(FROM\)\s*/i, "\n")
+      .trim() ?? ""
+  );
+}
+
+function getTikTokRecipientBlock(text: string): string {
+  const marker = /ถึง\s*/i.exec(text);
+  if (!marker) return "";
+
+  const afterMarker = text.slice(marker.index + marker[0].length);
+  return (
+    afterMarker
+      .split(/\r?\n?\s*(?=Order\s+ID\s*:|Shipping\s+Date\s*:|Estimated\s+Date\s*:|COD\b|PICK-UP\b)/i)[0]
+      ?.replace(/^\s*\(?\+?\d[\d*()\-\s]{7,}\)?\s*/i, "")
+      .trim() ?? ""
+  );
+}
+
+function getLazadaRecipientBlock(text: string): string {
+  const marker = /Receiver\s*:?\s*/i.exec(text);
+  if (!marker) return "";
+
+  const afterMarker = text.slice(marker.index + marker[0].length);
+  return (
+    afterMarker
+      .split(/\r?\n?\s*(?=Phone\s*(?:number)?\s*:|Sender\s*:|Payment\s+Type\s*:|LAZADA\s+Order\s+Number|Order\s+No\.?)/i)[0]
+      ?.trim() ?? ""
   );
 }
 

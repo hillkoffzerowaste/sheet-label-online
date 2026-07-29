@@ -54,7 +54,9 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /TikTok Shop/);
   assert.match(html, /ค้นหารายการ/);
   assert.match(html, /คัดลอกเลขพัสดุ/);
-  assert.match(html, /<button[^>]*disabled[^>]*>Go to Sheet<\/button>/);
+  assert.match(html, /href="https:\/\/docs\.google\.com\/spreadsheets\/d\//);
+  assert.match(html, /href="https:\/\/drive\.google\.com\/drive\/u\/0\/folders\//);
+  assert.doesNotMatch(html, /<button[^>]*disabled[^>]*>Go to Sheet<\/button>/);
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
 
   await assert.rejects(access(new URL("app/_sites-preview", templateRoot)));
