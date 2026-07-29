@@ -143,6 +143,57 @@ function processInputFolder() {
   return results;
 }
 
+function onSpreadsheetOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("PDF")
+    .addItem("รีเฟรช PDF ตอนนี้", "refreshNow")
+    .addToUi();
+}
+
+function refreshNow() {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  spreadsheet.toast("กำลังประมวลผล PDF ใหม่...", "PDF", 5);
+
+  try {
+    const results = processInputFolder();
+    const ready = results.filter(function (result) {
+      return result && result.status === "ready";
+    }).length;
+    const review = results.length - ready;
+    spreadsheet.toast(
+      "รีเฟรชเสร็จแล้ว: " + results.length + " ไฟล์ | พร้อมใช้ " + ready + " | ตรวจสอบ " + review,
+      "PDF",
+      8,
+    );
+    return results;
+  } catch (error) {
+    spreadsheet.toast("รีเฟรชไม่สำเร็จ กรุณาตรวจ Execution log", "PDF", 8);
+    throw error;
+  }
+}
+
+function setupPdfProcessingTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    const handler = trigger.getHandlerFunction();
+    if (
+      handler === "runLabelSync" ||
+      handler === "processInputFolder" ||
+      handler === "onSpreadsheetOpen"
+    ) {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  ScriptApp.newTrigger("processInputFolder")
+    .timeBased()
+    .everyMinutes(10)
+    .create();
+  ScriptApp.newTrigger("onSpreadsheetOpen")
+    .forSpreadsheet(SPREADSHEET_ID)
+    .onOpen()
+    .create();
+}
+
 function processDriveFile(fileId) {
   const file = DriveApp.getFileById(fileId);
 
