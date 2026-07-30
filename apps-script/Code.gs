@@ -254,7 +254,12 @@ function processDriveFile(fileId, requestId) {
     var ocrTextAvailable = false;
     try {
       ocrTextAvailable = Boolean(String(getOcrText_() || "").trim());
-    } catch (_) {}
+    } catch (error) {
+      if (isRetryableError_(error)) {
+        return buildRetryableProcessingResult_(file, error, 0, "drive-ocr", requestId);
+      }
+      throw error;
+    }
 
     var ocrLabels = ocrTextAvailable
       ? buildOcrShippingLabels_(file.getName(), file.getUrl(), getOcrText_())
@@ -963,27 +968,66 @@ function isGeminiQuotaProcessingError_(error) {
 }
 
 function extractTextWithDriveOcr_(file) {
-  var converted;
-  try {
-    converted = Drive.Files.insert(
-      { title: "OCR-" + file.getName(), mimeType: MimeType.GOOGLE_DOCS },
-      file.getBlob(),
-      { ocr: true, ocrLanguage: "th" },
-    );
-    return DocumentApp.openById(converted.id).getBody().getText();
-  } catch (error) {
-    throw createProcessingError_(
-      "DriveOcrError",
-      "Drive OCR ไม่สามารถแปลง PDF ได้: " + (error && error.message ? error.message : ""),
-      true,
-    );
-  } finally {
-    if (converted && converted.id) {
-      try {
-        DriveApp.getFileById(converted.id).setTrashed(true);
-      } catch (_) {}
+  var lastError = null;
+  var bestText = "";
+  var ocrLanguages = ["th", "en"];
+
+  for (var languageIndex = 0; languageIndex < ocrLanguages.length; languageIndex++) {
+    var converted;
+    try {
+      converted = Drive.Files.insert(
+        { title: "OCR-" + file.getName(), mimeType: MimeType.GOOGLE_DOCS },
+        file.getBlob(),
+        { ocr: true, ocrLanguage: ocrLanguages[languageIndex] },
+      );
+
+      var text = waitForDriveOcrText_(converted.id);
+      if (text.length > bestText.length) bestText = text;
+      if (isUsefulDriveOcrText_(text)) return text;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      if (converted && converted.id) {
+        try {
+          DriveApp.getFileById(converted.id).setTrashed(true);
+        } catch (_) {}
+      }
     }
   }
+
+  if (isUsefulDriveOcrText_(bestText)) return bestText;
+  if (lastError) {
+    throw createProcessingError_(
+      "DriveOcrError",
+      "Drive OCR ไม่สามารถอ่าน PDF ได้: " + (lastError.message || lastError),
+      true,
+    );
+  }
+  throw createProcessingError_(
+    "DriveOcrEmptyError",
+    "Drive OCR แปลง PDF แล้วแต่ไม่พบข้อความที่อ่านได้",
+    true,
+  );
+}
+
+function waitForDriveOcrText_(documentId) {
+  var lastText = "";
+  for (var attempt = 0; attempt < 4; attempt++) {
+    lastText = DocumentApp.openById(documentId).getBody().getText() || "";
+    if (isUsefulDriveOcrText_(lastText)) return lastText;
+    if (attempt < 3) Utilities.sleep(1000);
+  }
+  return lastText;
+}
+
+function isUsefulDriveOcrText_(text) {
+  var value = String(text || "").trim();
+  if (value.length < 30) return false;
+  return (
+    /shopee|lazada|tiktok/i.test(value) &&
+    (/\bTH\d{8,}[A-Z]\b/i.test(value) ||
+      /order\s*(?:no\.?|id)|เลขที่คำสั่งซื้อ|หมายเลขคำสั่งซื้อ/i.test(value))
+  );
 }
 
 function detectMarketplace(text) {

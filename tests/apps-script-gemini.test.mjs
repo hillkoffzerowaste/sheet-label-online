@@ -254,6 +254,31 @@ test("moves a complete OCR shipping-label PDF to Processed without a legacy orde
   assert.equal(orderWrites, 0);
 });
 
+test("keeps the PDF available for retry when Drive OCR fails", async () => {
+  const context = await loadHelpers();
+  let movedToReview = false;
+  const file = {
+    getId: () => "ocr-failure-id",
+    getName: () => "22.pdf",
+    getUrl: () => "https://drive/22",
+  };
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractTextWithDriveOcr_ = () => {
+    throw context.createProcessingError_("DriveOcrError", "OCR conversion failed", true);
+  };
+  context.moveToReview = () => {
+    movedToReview = true;
+  };
+
+  const result = context.processDriveFile("ocr-failure-id");
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.retryable, true);
+  assert.equal(result.source, "drive-ocr");
+  assert.equal(movedToReview, false);
+});
+
 test("uses Drive OCR once without calling Gemini when quota is exhausted", async () => {
   const context = await loadHelpers();
   let ocrCalls = 0;
@@ -292,15 +317,15 @@ test("uses Drive OCR once without calling Gemini when quota is exhausted", async
 
 test("trashes the temporary OCR document even when OCR text reading fails", async () => {
   const context = await loadHelpers();
-  let copyOptions;
+  const copyOptions = [];
   let trashed = 0;
 
   context.MimeType = { GOOGLE_DOCS: "application/vnd.google-apps.document" };
   context.Drive = {
     Files: {
       insert: (resource, blob, options) => {
-        copyOptions = { resource, blob, options };
-        return { id: "ocr-doc-id" };
+        copyOptions.push({ resource, blob, options });
+        return { id: `ocr-doc-id-${copyOptions.length}` };
       },
     },
   };
@@ -330,9 +355,11 @@ test("trashes the temporary OCR document even when OCR text reading fails", asyn
 
   assert.equal(caught.name, "DriveOcrError");
   assert.equal(caught.retryable, true);
-  assert.equal(trashed, 1);
-  assert.equal(copyOptions.options.ocr, true);
-  assert.equal(copyOptions.options.ocrLanguage, "th");
+  assert.equal(trashed, 2);
+  assert.equal(copyOptions.length, 2);
+  assert.equal(copyOptions[0].options.ocr, true);
+  assert.equal(copyOptions[0].options.ocrLanguage, "th");
+  assert.equal(copyOptions[1].options.ocrLanguage, "en");
 });
 
 test("uses readable OCR shipping labels without calling Gemini", async () => {
