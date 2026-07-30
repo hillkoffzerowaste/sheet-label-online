@@ -58,7 +58,7 @@ GEMINI_API_KEY=your-gemini-api-key
 GEMINI_MODEL=gemini-3.1-flash-lite
 ```
 
-เปิดใช้ OCR fallback ใน Apps Script editor ด้วยเมนู **บริการ (+) → Drive API → เพิ่ม**. หากระบบพาไป Google Cloud Console ให้เปิด Google Drive API ด้วย. OCR fallback ใช้สิทธิ์ของ Apps Script และไม่ต้องใช้ API key เพิ่ม; ระบบจะใช้เมื่อ Gemini ตอบว่า quota/rate limit เต็ม และจะสร้าง Google Docs ชั่วคราวเพื่ออ่านข้อความก่อนลบทิ้ง.
+เปิดใช้ OCR ใน Apps Script editor ด้วยเมนู **บริการ (+) → Drive API → เพิ่ม**. หากระบบพาไป Google Cloud Console ให้เปิด Google Drive API ด้วย. ระบบจะลอง Google Drive OCR ก่อน และเรียก Gemini เฉพาะเมื่อ OCR แปลงไม่ได้หรือข้อมูลจำเป็นไม่ครบ. หาก Gemini ตอบว่า quota/rate limit เต็ม ระบบจะเก็บผล OCR ที่อ่านได้เป็น `review` และไม่เรียก Gemini ซ้ำ; ไม่ต้องใช้ API key เพิ่มสำหรับ OCR.
 
 ใน Apps Script editor ให้สร้าง installable **time-driven trigger** ที่เรียก `processInputFolder` ทุก 10 นาที. Trigger นี้เป็นผู้เริ่มการสแกน Drive อัตโนมัติ; Web App ไม่ได้เริ่มการประมวลผลเอง.
 

@@ -6,15 +6,15 @@
 
 ## Recommended design
 
-Apps Script จะยังใช้ Gemini เป็นตัวหลัก เมื่อ Gemini ตอบ HTTP 429 หรือข้อความที่ระบุว่า quota/rate limit/resource exhausted ให้เปลี่ยนไปใช้ Google Drive OCR เฉพาะ execution นั้น
+Apps Script จะใช้ Google Drive OCR เป็นด่านแรก เมื่อ OCR อ่านข้อมูลที่จำเป็นไม่ได้จริงจึงเรียก Gemini เพื่ออ่าน PDF แบบ multimodal. หาก Gemini ตอบ HTTP 429 หรือข้อความที่ระบุว่า quota/rate limit/resource exhausted ระบบจะเก็บผล OCR ที่มีอยู่เป็น `review` และไม่เรียก Gemini ซ้ำ
 
 ลำดับการทำงาน:
 
 1. อ่าน PDF จากโฟลเดอร์ input
-2. เรียก Gemini ตามปกติ
-3. เมื่อพบ quota error ให้สร้าง Google Docs ชั่วคราวจาก PDF ด้วย Advanced Drive Service (`Drive.Files.insert` พร้อม `ocr: true` และ `ocrLanguage: "th"`)
-4. อ่านข้อความด้วย `DocumentApp`
-5. ตรวจ Marketplace และใช้ parser แบบกำหนดกติกาเดิมเพื่อสร้าง Order/Shipping Label
+2. สร้าง Google Docs ชั่วคราวจาก PDF ด้วย Advanced Drive Service (`Drive.Files.insert` พร้อม `ocr: true` และ `ocrLanguage: "th"`)
+3. อ่านข้อความด้วย `DocumentApp`
+4. ตรวจ Marketplace และใช้ parser แบบกำหนดกติกาเดิมเพื่อสร้าง Order/Shipping Label
+5. ถ้า OCR ให้ข้อมูลใบปะหน้าครบ ให้เขียนผล OCR โดยไม่เรียก Gemini; ถ้าไม่ครบ ให้เรียก Gemini เฉพาะส่วนที่อ่านไม่สำเร็จ
 6. กำหนด `source` เป็น `drive-ocr` และกำหนด `confidence` ต่ำกว่าผล Gemini เพื่อให้ข้อมูลที่ไม่แน่ใจไปสถานะ `review`
 7. เขียนผลลงชีตรายวัน/ชีต audit ตาม flow เดิม แล้วลบ Google Docs ชั่วคราว
 8. ถ้า OCR อ่านไม่ได้หรือข้อมูลไม่ครบ ให้เขียนแถว `review` เมื่อมีข้อมูล และย้าย PDF ไป Processed หลังบันทึกสำเร็จ
@@ -22,10 +22,10 @@ Apps Script จะยังใช้ Gemini เป็นตัวหลัก �
 
 ## Error policy
 
-- เฉพาะ quota/rate-limit errors เท่านั้นที่ใช้ OCR fallback
+- OCR เป็นเส้นทางหลัก; Gemini เป็น fallback เมื่อ OCR แปลงไม่ได้หรือข้อมูลจำเป็นไม่ครบ
 - Gemini response ผิด schema, PDF เสีย, หรือ API key หาย จะไม่ถูกตีความว่า quota เต็ม
-- ห้าม retry Gemini ซ้ำใน execution เดียวหลังพบ HTTP 429 เพื่อไม่ใช้โควตาเพิ่ม
-- OCR fallback ต้องไม่เรียก Gemini อีกครั้ง
+- ห้ามเรียก Gemini ซ้ำใน execution เดียวหลังพบ HTTP 429 เพื่อไม่ใช้โควตาเพิ่ม
+- ใช้ข้อความ OCR เดิมร่วมกับการ parse ใบปะหน้าและ Order ภายใน execution เดียว
 - การเขียนข้อมูลต้องใช้ key เดิมของไฟล์/Order ID/Tracking เพื่อป้องกันแถวซ้ำ
 
 ## Google services

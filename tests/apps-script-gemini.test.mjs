@@ -215,6 +215,108 @@ test("trashes the temporary OCR document even when OCR text reading fails", asyn
   assert.equal(copyOptions.options.ocrLanguage, "th");
 });
 
+test("uses readable OCR shipping labels before calling Gemini", async () => {
+  const context = await loadHelpers();
+  let ocrCalls = 0;
+  let shippingGeminiCalls = 0;
+  let orderGeminiCalls = 0;
+  let writtenLabels = [];
+  const file = {
+    getId: () => "ocr-first-id",
+    getName: () => "ocr-first.pdf",
+    getUrl: () => "https://drive/ocr-first",
+  };
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractTextWithDriveOcr_ = () => {
+    ocrCalls += 1;
+    return "Shopee\nRecipient: Mali Demo\nOrder No.: SP-1001\nTracking: TH1001\nAddress: Bangkok 10110";
+  };
+  context.extractShippingLabelsWithGemini_ = () => {
+    shippingGeminiCalls += 1;
+    return [];
+  };
+  context.extractOrderWithGemini_ = () => {
+    orderGeminiCalls += 1;
+    return context.normalizeGeminiOrder_({
+      marketplace: "shopee",
+      orderId: "SP-1001",
+      customerName: "Mali Demo",
+      items: [{ name: "Coffee", quantity: 1 }],
+      quantity: 1,
+      address: "Bangkok 10110",
+      total: 100,
+      confidence: 90,
+      missingFields: [],
+      rawNotes: "",
+    });
+  };
+  context.writeShippingLabels_ = (labels) => {
+    writtenLabels = labels;
+    return { inserted: labels.length };
+  };
+  context.writeOrderResult_ = () => {};
+  context.isDuplicateOrder = () => false;
+  context.moveToProcessed = () => {};
+
+  context.processDriveFile("ocr-first-id");
+
+  assert.equal(ocrCalls, 1);
+  assert.equal(shippingGeminiCalls, 0);
+  assert.equal(orderGeminiCalls, 1);
+  assert.equal(writtenLabels[0].source, "drive-ocr");
+});
+
+test("calls Gemini after OCR cannot produce a usable shipping label", async () => {
+  const context = await loadHelpers();
+  let shippingGeminiCalls = 0;
+  let orderGeminiCalls = 0;
+  const file = {
+    getId: () => "ocr-incomplete-id",
+    getName: () => "ocr-incomplete.pdf",
+    getUrl: () => "https://drive/ocr-incomplete",
+  };
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractTextWithDriveOcr_ = () => "Shopee";
+  context.extractShippingLabelsWithGemini_ = () => {
+    shippingGeminiCalls += 1;
+    return [
+      {
+        marketplace: "shopee",
+        recipientName: "Mali Demo",
+        shippingAddress: "Bangkok 10110",
+        orderId: "SP-1001",
+        trackingNumber: "TH1001",
+      },
+    ];
+  };
+  context.extractOrderWithGemini_ = () => {
+    orderGeminiCalls += 1;
+    return context.normalizeGeminiOrder_({
+      marketplace: "shopee",
+      orderId: "SP-1001",
+      customerName: "Mali Demo",
+      items: [{ name: "Coffee", quantity: 1 }],
+      quantity: 1,
+      address: "Bangkok 10110",
+      total: 100,
+      confidence: 90,
+      missingFields: [],
+      rawNotes: "",
+    });
+  };
+  context.writeShippingLabels_ = () => ({ inserted: 1 });
+  context.writeOrderResult_ = () => {};
+  context.isDuplicateOrder = () => false;
+  context.moveToProcessed = () => {};
+
+  context.processDriveFile("ocr-incomplete-id");
+
+  assert.equal(shippingGeminiCalls, 1);
+  assert.equal(orderGeminiCalls, 1);
+});
+
 test("hides only older dated shipping-label sheets", async () => {
   const context = await loadHelpers();
   const hidden = [];

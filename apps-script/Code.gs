@@ -209,49 +209,48 @@ function processDriveFile(fileId) {
   };
 
   try {
-    let shippingExport;
+    var ocrTextAvailable = false;
     try {
-      shippingExport = exportShippingLabels_(file);
-    } catch (error) {
-      if (isGeminiQuotaProcessingError_(error)) {
-        const ocrLabels = buildOcrShippingLabels_(
-          file.getName(),
-          file.getUrl(),
-          getOcrText_(),
-        );
-        const ocrResult = writeShippingLabels_(ocrLabels, file.getUrl());
-        shippingExport = {
-          inserted:
-            ocrResult && Number.isFinite(ocrResult.inserted)
-              ? ocrResult.inserted
-              : ocrLabels.length,
-          total: ocrLabels.length,
-        };
-      } else if (isRetryableError_(error)) {
-        throw error;
-      } else {
-        const reviewLabels = prepareShippingLabelsForExport_(file.getName(), []);
-        const reviewResult = writeShippingLabels_(reviewLabels, file.getUrl());
-        shippingExport = {
-          inserted:
-            reviewResult && Number.isFinite(reviewResult.inserted)
-              ? reviewResult.inserted
-              : reviewLabels.length,
-          total: reviewLabels.length,
-        };
+      ocrTextAvailable = Boolean(String(getOcrText_() || "").trim());
+    } catch (_) {}
+
+    var ocrLabels = ocrTextAvailable
+      ? buildOcrShippingLabels_(file.getName(), file.getUrl(), getOcrText_())
+      : [];
+    let shippingExport;
+    if (isUsableOcrShippingLabels_(ocrLabels)) {
+      shippingExport = writeShippingLabelCandidates_(ocrLabels, file.getUrl());
+    } else {
+      try {
+        shippingExport = exportShippingLabels_(file);
+      } catch (error) {
+        if (ocrLabels.length > 0 && isGeminiQuotaProcessingError_(error)) {
+          shippingExport = writeShippingLabelCandidates_(ocrLabels, file.getUrl());
+        } else if (isRetryableError_(error)) {
+          throw error;
+        } else {
+          const reviewLabels = ocrLabels.length
+            ? ocrLabels
+            : prepareShippingLabelsForExport_(file.getName(), []);
+          shippingExport = writeShippingLabelCandidates_(reviewLabels, file.getUrl());
+        }
       }
     }
 
     try {
-      let order;
-      if (ocrFetched) {
-        order = buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_());
-      } else {
+      var ocrOrder = ocrTextAvailable
+        ? buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_())
+        : null;
+      let order = ocrOrder;
+      if (!isUsableOcrOrder_(ocrOrder)) {
         try {
           order = extractOrderWithGemini_(file);
         } catch (error) {
-          if (!isGeminiQuotaProcessingError_(error)) throw error;
-          order = buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_());
+          if (ocrOrder && (isGeminiQuotaProcessingError_(error) || !isRetryableError_(error))) {
+            order = ocrOrder;
+          } else {
+            throw error;
+          }
         }
       }
 
@@ -277,6 +276,37 @@ function processDriveFile(fileId) {
     moveToProcessed(file);
     return order;
   }
+}
+
+function isUsableOcrShippingLabels_(labels) {
+  return (labels || []).some(function (label) {
+    return (
+      label &&
+      label.status === "ready" &&
+      label.marketplace !== "Unknown" &&
+      label.recipientName &&
+      label.shippingAddress &&
+      label.orderId &&
+      label.trackingNumber
+    );
+  });
+}
+
+function isUsableOcrOrder_(order) {
+  return Boolean(
+    order &&
+      order.status === "ready" &&
+      Array.isArray(order.missingFields) &&
+      order.missingFields.length === 0,
+  );
+}
+
+function writeShippingLabelCandidates_(labels, fileUrl) {
+  const result = writeShippingLabels_(labels, fileUrl);
+  return {
+    inserted: result && Number.isFinite(result.inserted) ? result.inserted : labels.length,
+    total: labels.length,
+  };
 }
 
 function finalizeOrderResult_(order, file, shippingLabelsExported) {

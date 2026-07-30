@@ -4,14 +4,14 @@
 
 **Goal:** ให้ Apps Script ใช้ Google Drive OCR อัตโนมัติเมื่อ Gemini โควตาเต็ม โดยไม่ทำไฟล์หายหรือเขียนแถวซ้ำ
 
-**Architecture:** Gemini เป็นตัวหลัก. เมื่อพบ HTTP 429 หรือ response ที่ระบุ quota/rate-limit/resource exhausted ให้แปลง PDF เป็น Google Docs ชั่วคราวด้วย `Drive.Files.insert`, อ่านข้อความด้วย DocumentApp, parse ด้วยกติกาเดิม, และ reuse OCR text ครั้งเดียวต่อ PDF. ผล fallback มี `source: "drive-ocr"` และข้อมูลไม่ครบเป็น `review`.
+**Architecture:** Google Drive OCR เป็นด่านแรก. เมื่อ OCR อ่านข้อมูลจำเป็นไม่ครบจึงเรียก Gemini เฉพาะส่วนที่ขาด; ทั้งสองเส้นทาง reuse OCR text ครั้งเดียวต่อ PDF. ผล OCR มี `source: "drive-ocr"` และข้อมูลไม่ครบเป็น `review`.
 
 **Tech Stack:** Google Apps Script, Advanced Drive Service (`Drive.Files.insert`), `DocumentApp`, Node `node:test`, existing `apps-script/Code.gs`.
 
 ## Global Constraints
 
-- OCR fallback ทำงานเฉพาะ quota/rate-limit error; schema error, bad PDF, และ API-key error ไม่ใช่ quota
-- ห้าม retry Gemini ซ้ำใน execution เดียวหลัง HTTP 429
+- OCR ต้องทำงานก่อน Gemini; Gemini ใช้เมื่อ OCR แปลงไม่ได้หรือข้อมูลจำเป็นไม่ครบ
+- ห้ามเรียก Gemini ซ้ำใน execution เดียวหลัง HTTP 429
 - ใช้ `Drive.Files.insert` พร้อม `ocr: true`, `ocrLanguage: "th"`; ลบ Google Docs ชั่วคราวใน `finally`
 - ผล OCR ใช้ `source: "drive-ocr"`; ข้อมูลที่ขาดต้องเป็น `review` และห้ามเดา
 - ถ้า OCR/Drive/Sheet ล้มเหลวแบบ retryable ให้คง PDF ไว้ใน input folder
@@ -50,7 +50,7 @@
 - [ ] **Step 4: Run `node --test tests/apps-script-gemini.test.mjs` and `node --import tsx --test src/shipping-label.test.ts`.** All tests must pass.
 - [ ] **Step 5: Commit:** `git add tests/apps-script-gemini.test.mjs apps-script/Code.gs && git commit -m "feat: parse marketplace labels from Drive OCR text"`.
 
-### Task 3: Wire one cached OCR fallback into `processDriveFile`
+### Task 3: Make OCR first and call Gemini only when OCR is unusable
 
 **Files:** Modify `tests/apps-script-gemini.test.mjs`; modify `apps-script/Code.gs`.
 
@@ -61,11 +61,12 @@
 
 - [ ] **Step 1: Add a failing flow test.** Stub both Gemini extractors to throw a quota error, stub `extractTextWithDriveOcr_` to count calls, stub writes/movement as in existing tests, and assert `processDriveFile` calls OCR once and returns `source: "drive-ocr"`.
 - [ ] **Step 2: Run the focused Apps Script test and verify it fails because quota errors currently return retryable failure without OCR.**
-- [ ] **Step 3: Preserve Gemini HTTP status/body before throwing.** Throw a named quota error only when `isGeminiQuotaError_` matches; keep all other errors on existing paths.
-- [ ] **Step 4: Add a local `getOcrText_` closure/cache in `processDriveFile`.** Route both shipping-label and order extraction through the cached OCR text after quota exhaustion; do not call Gemini again in that execution.
-- [ ] **Step 5: Make `extractTextWithDriveOcr_` clean up temp Docs in `finally` and convert Drive/OCR failures to retryable processing errors.**
-- [ ] **Step 6: Run `npm test`; all existing and new tests must pass.**
-- [ ] **Step 7: Commit:** `git add tests/apps-script-gemini.test.mjs apps-script/Code.gs && git commit -m "feat: use Drive OCR when Gemini quota is exhausted"`.
+- [ ] **Step 3: Add OCR-first selection.** Call `extractTextWithDriveOcr_` before either Gemini extractor. Write OCR labels directly when all required label fields exist; otherwise call Gemini for shipping labels.
+- [ ] **Step 4: Add a local `getOcrText_` closure/cache in `processDriveFile`.** Reuse one OCR conversion for labels and order. Call Gemini for Order only when the OCR order is not complete; on Gemini quota exhaustion keep the OCR result as `review`.
+- [ ] **Step 5: Preserve Gemini HTTP status/body before throwing.** Throw a named quota error only when `isGeminiQuotaError_` matches; keep all other errors on existing paths.
+- [ ] **Step 6: Make `extractTextWithDriveOcr_` clean up temp Docs in `finally` and convert Drive/OCR failures to retryable processing errors.**
+- [ ] **Step 7: Run `npm test`; all existing and new tests must pass.**
+- [ ] **Step 8: Commit:** `git add tests/apps-script-gemini.test.mjs apps-script/Code.gs && git commit -m "feat: prioritize Drive OCR before Gemini"`.
 
 ### Task 4: Document setup and validate the complete change
 
