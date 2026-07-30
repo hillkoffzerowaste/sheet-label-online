@@ -1206,8 +1206,19 @@ function writeShippingLabels_(labels, fileUrl) {
     const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheet = getShippingLabelsSheet_(new Date(), spreadsheet);
     const lastRow = sheet.getLastRow();
+    const sheetRows =
+      lastRow > 1
+        ? sheet.getRange(2, 1, lastRow - 1, SHIPPING_LABEL_HEADERS.length).getValues()
+        : [];
     const existingRows = getExistingShippingLabelRows_(spreadsheet);
     const newLabels = filterNewShippingLabels_(labels, existingRows);
+    const readyFileNames = {};
+    (labels || []).forEach(function (label) {
+      if (label && label.status !== "review" && label.sourceFileName) {
+        readyFileNames[label.sourceFileName] = true;
+      }
+    });
+    removeStaleReviewPlaceholders_(sheet, sheetRows, readyFileNames);
     const rows = newLabels.map(function (label) {
       return [
         new Date(),
@@ -1225,7 +1236,12 @@ function writeShippingLabels_(labels, fileUrl) {
 
     if (rows.length > 0) {
       sheet
-        .getRange(lastRow + 1, 1, rows.length, SHIPPING_LABEL_HEADERS.length)
+        .getRange(
+          sheet.getLastRow() + 1,
+          1,
+          rows.length,
+          SHIPPING_LABEL_HEADERS.length,
+        )
         .setValues(rows);
     }
 
@@ -1240,6 +1256,26 @@ function writeShippingLabels_(labels, fileUrl) {
       true,
     );
   }
+}
+
+function removeStaleReviewPlaceholders_(sheet, existingRows, readyFileNames) {
+  if (!sheet || typeof sheet.deleteRow !== "function") return;
+
+  const staleRows = [];
+  (existingRows || []).forEach(function (row, index) {
+    if (!row || !readyFileNames[stringValue_(row[1])]) return;
+    if (stringValue_(row[2]) !== "Unknown" || stringValue_(row[7]) !== "review") {
+      return;
+    }
+    if (row.slice(3, 7).some(function (value) { return stringValue_(value); })) {
+      return;
+    }
+    staleRows.push(index + 2);
+  });
+
+  staleRows.reverse().forEach(function (rowNumber) {
+    sheet.deleteRow(rowNumber);
+  });
 }
 
 function filterNewShippingLabels_(labels, existingRows) {

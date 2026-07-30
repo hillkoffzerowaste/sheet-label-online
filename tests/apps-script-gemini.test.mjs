@@ -775,3 +775,41 @@ test("filters shipping label rows already exported for the same file", async () 
   assert.equal(newLabels.length, 1);
   assert.equal(newLabels[0].marketplace, "Lazada");
 });
+
+test("removes stale empty review placeholders when a file later reads successfully", async () => {
+  const context = await loadHelpers();
+  const deletedRows = [];
+  const sheet = {
+    deleteRow: (rowNumber) => deletedRows.push(rowNumber),
+  };
+  const existingRows = [
+    [
+      new Date(),
+      "22.pdf",
+      "Unknown",
+      "",
+      "",
+      "",
+      "",
+      "review",
+      "marketplace,recipientName,shippingAddress,orderId,trackingNumber",
+      "https://drive/22",
+    ],
+    [
+      new Date(),
+      "22.pdf",
+      "Shopee",
+      "Mali One",
+      "Bangkok 10110",
+      "2607302AAA111",
+      "TH269321699657I",
+      "review",
+      "duplicateOrderId",
+      "https://drive/22",
+    ],
+  ];
+
+  context.removeStaleReviewPlaceholders_(sheet, existingRows, { "22.pdf": true });
+
+  assert.deepEqual(deletedRows, [2]);
+});
