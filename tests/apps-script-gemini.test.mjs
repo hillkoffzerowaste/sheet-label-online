@@ -196,6 +196,24 @@ test("parses a Lazada LEX OCR layout with inline customer and address fields", a
   assert.equal(labels[0].status, "ready");
 });
 
+test("joins a Lazada barcode value when OCR splits the tracking text", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "2 lazada.pdf",
+    [
+      "LEX",
+      "UP0702650797",
+      "Order No.: 1117718175852180",
+      "Customer NAME: Arun Demo",
+      "ADDRESS: 73/1 Moo 13, Ban Pong, Ratchaburi 70110",
+      "Lazada",
+    ].join("\n"),
+  );
+
+  assert.equal(labels[0].trackingNumber, "LEXUP0702650797");
+  assert.equal(labels[0].status, "ready");
+});
+
 test("parses TikTok J&T OCR from a file-name marketplace hint", async () => {
   const context = await loadHelpers();
   const labels = context.parseOcrShippingLabels_(

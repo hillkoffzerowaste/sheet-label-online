@@ -1737,7 +1737,7 @@ function parseOcrShippingLabels_(fileName, text) {
 
 function parseLazadaOcrShippingLabels_(fileName, text) {
   var value = normalizeOcrText_(text);
-  var trackingMatch = /\bLEX[A-Z0-9-]{6,}\b/i.exec(value);
+  var trackingNumber = extractLazadaTrackingNumber_(value);
   var recipientName = readOcrInlineField_(value, "Customer\\s*(?:NAME)?\\s*:\\s*([^\\r\\n]+)") ||
     readOcrField_(value, ["Receiver", "Customer"]);
   var shippingAddress = readOcrBlockField_(
@@ -1752,9 +1752,31 @@ function parseLazadaOcrShippingLabels_(fileName, text) {
     recipientName: recipientName,
     shippingAddress: shippingAddress,
     orderId: orderId,
-    trackingNumber: trackingMatch ? trackingMatch[0] : readOcrField_(value, ["Tracking"]),
+    trackingNumber: trackingNumber || readOcrField_(value, ["Tracking"]),
   };
   return normalizeShippingLabels_(fileName, [label]);
+}
+
+function extractLazadaTrackingNumber_(text) {
+  var value = normalizeOcrText_(text);
+  var directMatch = /\bLEX[A-Z0-9-]{6,}\b/i.exec(value);
+  if (directMatch) return directMatch[0].replace(/-/g, "").toUpperCase();
+
+  var lines = value.split(/\r?\n/);
+  for (var index = 0; index < lines.length; index++) {
+    if (!/\bLEX/i.test(lines[index])) continue;
+    var barcodeText = lines[index];
+    for (var nextIndex = index + 1; nextIndex < Math.min(lines.length, index + 3); nextIndex++) {
+      var nextLine = lines[nextIndex].trim();
+      if (!nextLine || /^Order\b|^Customer\b|^Address\b|^Lazada\b/i.test(nextLine)) break;
+      if (!/^[A-Z0-9 -]{4,24}$/i.test(nextLine)) break;
+      barcodeText += " " + nextLine;
+    }
+    var compact = barcodeText.replace(/[\s-]/g, "").toUpperCase();
+    var splitMatch = /LEX[A-Z0-9]{10,20}/.exec(compact);
+    if (splitMatch) return splitMatch[0];
+  }
+  return "";
 }
 
 function parseTikTokOcrShippingLabels_(fileName, text) {
