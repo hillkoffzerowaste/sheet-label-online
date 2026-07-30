@@ -167,6 +167,87 @@ test("parses OCR shipping-label fields into a review-safe label", async () => {
   assert.equal(labels[0].status, "ready");
 });
 
+test("parses four Shopee SPX labels from a two-column PDF OCR reading", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "22.pdf",
+    [
+      "Shopee TH269321699657I ผู้รับ (TO) Mali One\nเลขที่ 1 ถนนเชียงใหม่ จังหวัดเชียงใหม่ 50000\nผู้ส่ง (FROM) HILLKOFF\nShopee Order No. 2607302AAA111",
+      "Shopee TH263542846574F ผู้รับ (TO) Mali Two\nร้านกาแฟ จังหวัดศรีสะเกษ 33270\nผู้ส่ง (FROM) HILLKOFF\nShopee Order No. 2607302BBB222",
+      "Shopee TH265776755066F ผู้รับ (TO) Mali Three\n319/241 จังหวัดนนทบุรี 11000\nผู้ส่ง (FROM) HILLKOFF\nShopee Order No. 2607302CCC333",
+      "Shopee TH263678467407E ผู้รับ (TO) Mali Four\n45/316 กรุงเทพมหานคร 10240\nผู้ส่ง (FROM) HILLKOFF\nShopee Order No. 2607302DDD444",
+      "Shopee Order No. 2607302AAA111 Shopee Order No. 2607302BBB222",
+    ].join("\n"),
+  );
+
+  assert.equal(labels.length, 4);
+  assert.deepEqual(Array.from(labels, (label) => label.orderId), [
+    "2607302AAA111",
+    "2607302BBB222",
+    "2607302CCC333",
+    "2607302DDD444",
+  ]);
+  assert.deepEqual(Array.from(labels, (label) => label.trackingNumber), [
+    "TH269321699657I",
+    "TH263542846574F",
+    "TH265776755066F",
+    "TH263678467407E",
+  ]);
+  assert.equal(labels.every((label) => label.status === "ready"), true);
+});
+
+test("normalizes Shopee Thai private-use glyphs from PDF text extraction", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "22.pdf",
+    "Shopee TH269321699657I ผ\uF70Bูรับ (TO) Mali One\nเลขที่ 1 เชียงใหม่ 50000\nผ\uF70Bูส่ง (FROM) HILLKOFF\nShopee Order No. 2607302AAA111",
+  );
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].recipientName, "Mali One");
+  assert.equal(labels[0].orderId, "2607302AAA111");
+  assert.equal(labels[0].trackingNumber, "TH269321699657I");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("uses the Shopee recipient address block before the tracking barcode", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "shopee-address.pdf",
+    "ASTAT-AG - Sri That\n131/10 Recipient Road, Udon Thani 41230\nG-1\nTH269321699657I\nShopee Order No. 2607302AAA111\nผู้รับ (TO)\nMali One\nผู้ส่ง (FROM)\n66 Sender Road, Chiang Mai 50200",
+  );
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].shippingAddress, "131/10 Recipient Road, Udon Thani 41230");
+});
+
+test("moves a complete OCR shipping-label PDF to Processed without a legacy order row", async () => {
+  const context = await loadHelpers();
+  let movedToProcessed = false;
+  let orderWrites = 0;
+  const file = {
+    getId: () => "shopee-spx-id",
+    getName: () => "22.pdf",
+    getUrl: () => "https://drive/22",
+  };
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractTextWithDriveOcr_ = () =>
+    "Route - City\n131/10 Recipient Road, Udon Thani 41230\nG-1\nTH269321699657I\nShopee Order No. 2607302AAA111\nผู้รับ (TO)\nMali One\nผู้ส่ง (FROM)\n66 Sender Road, Chiang Mai 50200";
+  context.writeShippingLabels_ = () => ({ inserted: 1 });
+  context.writeOrderResult_ = () => { orderWrites += 1; };
+  context.isDuplicateOrder = () => false;
+  context.moveToProcessed = () => { movedToProcessed = true; };
+  context.moveToReview = () => { throw new Error("should not move complete labels to review"); };
+
+  const result = context.processDriveFile("shopee-spx-id");
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.shippingLabelsExported, 1);
+  assert.equal(movedToProcessed, true);
+  assert.equal(orderWrites, 0);
+});
+
 test("uses Drive OCR once without calling Gemini when quota is exhausted", async () => {
   const context = await loadHelpers();
   let ocrCalls = 0;

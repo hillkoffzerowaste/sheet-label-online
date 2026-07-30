@@ -462,7 +462,21 @@ function finalizeOrderResult_(order, file, shippingLabelsExported, canMoveToProc
   order.missingFields = classification.missingFields;
   order.shippingLabelsExported = shippingLabelsExported;
 
-  writeOrderResult_(order);
+  var shippingLabelsReady =
+    order.source === "drive-ocr" &&
+    Number(shippingLabelsExported) > 0 &&
+    canMoveToProcessed === true;
+
+  if (shippingLabelsReady && order.status !== "ready") {
+    order.status = "ready";
+    order.reason = "Shipping label data complete";
+    order.missingFields = [];
+    order.shippingLabelsOnly = true;
+  }
+
+  if (!order.shippingLabelsOnly) {
+    writeOrderResult_(order);
+  }
   if (order.status === "ready" && canMoveToProcessed !== false) {
     moveToProcessed(file);
   } else {
@@ -1460,6 +1474,11 @@ function parseOcrOrder_(marketplace, text) {
 
 function parseOcrShippingLabels_(fileName, text) {
   var marketplace = detectMarketplace(text);
+
+  if (marketplace === "Shopee") {
+    return parseShopeeOcrShippingLabels_(fileName, text);
+  }
+
   var recipientName = readOcrField_(text, ["Recipient", "Receiver", "To", "Customer"]);
   var orderId = readOcrField_(text, [
     "Shopee Order No.",
@@ -1501,6 +1520,140 @@ function parseOcrShippingLabels_(fileName, text) {
       trackingNumber: trackingNumber,
     },
   ]);
+}
+
+function parseShopeeOcrShippingLabels_(fileName, text) {
+  var value = normalizePdfTextForParsing_(text);
+  var recipientMarkers = collectRegexMatches_(
+    value,
+    /ผู้รับ\s*\(\s*TO\s*\)/gi,
+  );
+
+  if (recipientMarkers.length === 0) {
+    return prepareShippingLabelsForExport_(fileName, []);
+  }
+
+  var trackingEntries = [];
+  var trackingSeen = {};
+  collectRegexMatches_(value, /\bTH\d{8,}[A-Z]\b/gi).forEach(function (match) {
+    var trackingNumber = match[0].trim();
+    if (trackingSeen[trackingNumber]) return;
+    trackingSeen[trackingNumber] = true;
+    trackingEntries.push({ value: trackingNumber, index: match.index });
+  });
+  var orderIds = uniqueValues_(
+    collectRegexValues_(
+      value,
+      /Shopee\s+Order\s+No\.?\s*:?\s*([A-Z0-9-]+)/gi,
+    ),
+  ).filter(function (orderId) {
+    return /^\d{7,}[A-Z0-9-]+$/i.test(orderId);
+  });
+
+  var values = recipientMarkers.map(function (marker, index) {
+    var nextMarker = recipientMarkers[index + 1];
+    var block = value.slice(
+      marker.index + marker[0].length,
+      nextMarker ? nextMarker.index : value.length,
+    );
+    var recipient = parseShopeeRecipientBlock_(block);
+    var tracking = trackingEntries[index];
+
+    return {
+      marketplace: "Shopee",
+      recipientName: recipient.name,
+      shippingAddress:
+        (tracking
+          ? parseShopeeAddressBeforeTracking_(value, tracking.index)
+          : "") || recipient.address,
+      orderId: orderIds[index] || "",
+      trackingNumber: tracking ? tracking.value : "",
+    };
+  });
+
+  return normalizeShippingLabels_(fileName, values);
+}
+
+function normalizePdfTextForParsing_(text) {
+  return String(text || "")
+    .replace(/\uF70A/g, "\u0E48")
+    .replace(/\uF70B/g, "\u0E49")
+    .replace(/([\u0E00-\u0E7F])([่้])ู/g, "$1ู$2");
+}
+
+function parseShopeeRecipientBlock_(block) {
+  var value = String(block || "");
+  var recipientSection = value.split(
+    /ผู้ส่ง\s*\(\s*FROM\s*\)|PICKUP\s+DATE|SHIP\s+BY\s+DATE|NOTE\b/i,
+  )[0];
+  var lines = recipientSection
+    .split(/\r?\n/)
+    .map(function (line) { return line.trim(); })
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    var afterSender = value.split(/ผู้ส่ง\s*\(\s*FROM\s*\)/i)[1] || "";
+    recipientSection = afterSender.split(/NOTE\b|PICKUP\s+DATE|SHIP\s+BY\s+DATE/i)[0];
+    lines = recipientSection
+      .split(/\r?\n/)
+      .map(function (line) { return line.trim(); })
+      .filter(Boolean);
+  }
+
+  return {
+    name: lines.shift() || "",
+    address: lines.join(" ").trim(),
+  };
+}
+
+function parseShopeeAddressBeforeTracking_(text, trackingIndex) {
+  if (trackingIndex < 0) return "";
+
+  var lines = String(text || "")
+    .slice(0, trackingIndex)
+    .split(/\r?\n/)
+    .map(function (line) { return line.trim(); })
+    .filter(Boolean);
+  var routeHeaderIndex = -1;
+  var routeStopIndex = -1;
+
+  for (var i = lines.length - 1; i >= 0; i--) {
+    if (/\s-\s/.test(lines[i])) {
+      routeHeaderIndex = i;
+      break;
+    }
+  }
+
+  if (routeHeaderIndex >= 0) {
+    for (var j = routeHeaderIndex + 1; j < lines.length; j++) {
+      if (/^[A-Z]\d*-(?:\d+|\([A-Z0-9.]+\))$/i.test(lines[j])) {
+        routeStopIndex = j;
+        break;
+      }
+    }
+  }
+
+  if (routeHeaderIndex < 0 || routeStopIndex <= routeHeaderIndex + 1) return "";
+  return lines.slice(routeHeaderIndex + 1, routeStopIndex).join(" ").trim();
+}
+
+function collectRegexValues_(text, pattern) {
+  return collectRegexMatches_(text, pattern).map(function (match) {
+    return (match[1] || match[0]).trim();
+  });
+}
+
+function collectRegexMatches_(text, pattern) {
+  var regex = new RegExp(pattern.source, pattern.flags);
+  var matches = [];
+  var match;
+
+  while ((match = regex.exec(String(text || ""))) !== null) {
+    matches.push(match);
+    if (match[0] === "") regex.lastIndex += 1;
+  }
+
+  return matches;
 }
 
 function jsonResponse_(data) {
