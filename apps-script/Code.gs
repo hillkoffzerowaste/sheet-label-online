@@ -195,7 +195,7 @@ function onSpreadsheetOpen() {
 
 function refreshNow() {
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  spreadsheet.toast("กำลังประมวลผล PDF ใหม่...", "PDF", 5);
+  safeSpreadsheetToast_(spreadsheet, "กำลังประมวลผล PDF ใหม่...", "PDF", 5);
 
   try {
     const results = processInputFolder();
@@ -203,15 +203,28 @@ function refreshNow() {
       return result && result.status === "ready";
     }).length;
     const review = results.length - ready;
-    spreadsheet.toast(
+    safeSpreadsheetToast_(spreadsheet,
       "รีเฟรชเสร็จแล้ว: " + results.length + " ไฟล์ | พร้อมใช้ " + ready + " | ตรวจสอบ " + review,
       "PDF",
       8,
     );
     return results;
   } catch (error) {
-    spreadsheet.toast("รีเฟรชไม่สำเร็จ กรุณาตรวจ Execution log", "PDF", 8);
+    safeSpreadsheetToast_(spreadsheet, "รีเฟรชไม่สำเร็จ กรุณาตรวจ Execution log", "PDF", 8);
     throw error;
+  }
+}
+
+function safeSpreadsheetToast_(spreadsheet, message, title, seconds) {
+  try {
+    if (spreadsheet && typeof spreadsheet.toast === "function") {
+      spreadsheet.toast(message, title, seconds);
+    }
+  } catch (error) {
+    console.warn(
+      "Spreadsheet toast is unavailable; continuing without notification",
+      error && error.message ? error.message : error,
+    );
   }
 }
 
@@ -339,7 +352,7 @@ function processDriveFileWithGemini(fileId, requestId) {
 
 function refreshWithGemini() {
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  spreadsheet.toast("กำลังเรียก Gemini กับ PDF ใน Review...", "PDF", 5);
+  safeSpreadsheetToast_(spreadsheet, "กำลังเรียก Gemini กับ PDF ใน Review...", "PDF", 5);
 
   try {
     const results = listPdfFiles_(getReviewFolderId_(), "review").map(function (pdf) {
@@ -353,14 +366,14 @@ function refreshWithGemini() {
     const retryable = results.filter(function (result) {
       return result && result.retryable === true;
     }).length;
-    spreadsheet.toast(
+    safeSpreadsheetToast_(spreadsheet,
       "Gemini เสร็จแล้ว: " + results.length + " ไฟล์ | พร้อมใช้ " + ready + " | ลองใหม่ " + retryable,
       "PDF",
       8,
     );
     return results;
   } catch (error) {
-    spreadsheet.toast("เรียก Gemini ไม่สำเร็จ กรุณาตรวจ Execution log", "PDF", 8);
+    safeSpreadsheetToast_(spreadsheet, "เรียก Gemini ไม่สำเร็จ กรุณาตรวจ Execution log", "PDF", 8);
     throw error;
   }
 }
@@ -1002,11 +1015,7 @@ function extractTextWithDriveOcr_(file) {
   for (var languageIndex = 0; languageIndex < ocrLanguages.length; languageIndex++) {
     var converted;
     try {
-      converted = Drive.Files.insert(
-        { title: "OCR-" + file.getName(), mimeType: MimeType.GOOGLE_DOCS },
-        file.getBlob(),
-        { ocr: true, ocrLanguage: ocrLanguages[languageIndex] },
-      );
+      converted = createDriveOcrDocument_(file, ocrLanguages[languageIndex]);
 
       var text = waitForDriveOcrText_(converted.id, file.getName());
       if (text.length > bestText.length) bestText = text;
@@ -1035,6 +1044,24 @@ function extractTextWithDriveOcr_(file) {
     "Drive OCR แปลง PDF แล้วแต่ไม่พบข้อความที่อ่านได้",
     true,
   );
+}
+
+function createDriveOcrDocument_(file, language) {
+  if (Drive.Files && typeof Drive.Files.create === "function") {
+    return Drive.Files.create(
+      { name: "OCR-" + file.getName(), mimeType: MimeType.GOOGLE_DOCS },
+      file.getBlob(),
+      { ocr: true, ocrLanguage: language, fields: "id" },
+    );
+  }
+  if (Drive.Files && typeof Drive.Files.insert === "function") {
+    return Drive.Files.insert(
+      { title: "OCR-" + file.getName(), mimeType: MimeType.GOOGLE_DOCS },
+      file.getBlob(),
+      { ocr: true, ocrLanguage: language },
+    );
+  }
+  throw new Error("Drive Advanced Service Files.create/insert is unavailable");
 }
 
 function waitForDriveOcrText_(documentId, fileName) {
@@ -1227,7 +1254,7 @@ function extractTextWithDocumentAi_(file) {
   if (!config.documentAiProcessor) return { text: "", barcodes: [] };
 
   var response = fetchGoogleCloudOcr_(
-    "https://documentai.googleapis.com/v1/" + config.documentAiProcessor + ":process",
+    buildDocumentAiProcessUrl_(config.documentAiProcessor),
     {
       rawDocument: {
         content: Utilities.base64Encode(file.getBlob().getBytes()),
@@ -1248,6 +1275,12 @@ function extractTextWithDocumentAi_(file) {
     text: document.text || "",
     barcodes: uniqueValues_(barcodes),
   };
+}
+
+function buildDocumentAiProcessUrl_(processorName) {
+  var value = String(processorName || "").trim().replace(/:process$/i, "");
+  if (/^https?:\/\//i.test(value)) return value + ":process";
+  return "https://documentai.googleapis.com/v1/" + value + ":process";
 }
 
 function normalizeOcrText_(text) {

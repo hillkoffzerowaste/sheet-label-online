@@ -346,6 +346,23 @@ test("reads Document AI text and detected barcode values", async () => {
   assert.deepEqual(Array.from(result.barcodes), ["LEXUP0702650797"]);
 });
 
+test("normalizes a full Document AI processor URL", async () => {
+  const context = await loadHelpers();
+
+  assert.equal(
+    context.buildDocumentAiProcessUrl_(
+      "https://us-documentai.googleapis.com/v1/projects/633651394402/locations/us/processors/81f3c0e27bfad96a:process",
+    ),
+    "https://us-documentai.googleapis.com/v1/projects/633651394402/locations/us/processors/81f3c0e27bfad96a:process",
+  );
+  assert.equal(
+    context.buildDocumentAiProcessUrl_(
+      "projects/633651394402/locations/us/processors/81f3c0e27bfad96a",
+    ),
+    "https://documentai.googleapis.com/v1/projects/633651394402/locations/us/processors/81f3c0e27bfad96a:process",
+  );
+});
+
 test("parses four Shopee SPX labels from a two-column PDF OCR reading", async () => {
   const context = await loadHelpers();
   const labels = context.parseOcrShippingLabels_(
@@ -591,6 +608,33 @@ test("trashes the temporary OCR document even when OCR text reading fails", asyn
   assert.equal(copyOptions[0].options.ocr, true);
   assert.equal(copyOptions[0].options.ocrLanguage, "th");
   assert.equal(copyOptions[1].options.ocrLanguage, "en");
+});
+
+test("uses Drive API v3 Files.create when the advanced service exposes it", async () => {
+  const context = await loadHelpers();
+  let request;
+  context.MimeType = { GOOGLE_DOCS: "application/vnd.google-apps.document" };
+  context.Drive = {
+    Files: {
+      create: (resource, blob, options) => {
+        request = { resource, blob, options };
+        return { id: "ocr-v3-doc-id" };
+      },
+    },
+  };
+
+  const result = context.createDriveOcrDocument_(
+    { getName: () => "lazada.pdf", getBlob: () => "pdf-blob" },
+    "th",
+  );
+
+  assert.equal(result.id, "ocr-v3-doc-id");
+  assert.equal(request.resource.name, "OCR-lazada.pdf");
+  assert.equal(request.resource.mimeType, "application/vnd.google-apps.document");
+  assert.equal(request.blob, "pdf-blob");
+  assert.equal(request.options.ocr, true);
+  assert.equal(request.options.ocrLanguage, "th");
+  assert.equal(request.options.fields, "id");
 });
 
 test("uses readable OCR shipping labels without calling Gemini", async () => {
