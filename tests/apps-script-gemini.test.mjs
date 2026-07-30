@@ -48,6 +48,17 @@ test("creates a shipping-label sheet name from the processing date", async () =>
   );
 });
 
+test("defaults Gemini PDF extraction to the current Flash-Lite model", async () => {
+  const context = await loadHelpers();
+  context.PropertiesService = {
+    getScriptProperties: () => ({
+      getProperty: (key) => (key === "GEMINI_API_KEY" ? "test-key" : null),
+    }),
+  };
+
+  assert.equal(context.getGeminiConfig_().model, "gemini-3.1-flash-lite");
+});
+
 test("hides only older dated shipping-label sheets", async () => {
   const context = await loadHelpers();
   const hidden = [];

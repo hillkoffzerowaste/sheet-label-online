@@ -1,6 +1,6 @@
-const INPUT_FOLDER_ID = "PASTE_INPUT_FOLDER_ID";
-const PROCESSED_FOLDER_ID = "PASTE_PROCESSED_FOLDER_ID";
-const SPREADSHEET_ID = "PASTE_SPREADSHEET_ID";
+const INPUT_FOLDER_ID = "1w_qEAjYeZFTmENeoFyjGVRX3syTNB2v5";
+const PROCESSED_FOLDER_ID = "1SPcNx77EOtGVMWxvq0IOZDGK1rBizoJH";
+const SPREADSHEET_ID = "1iXza5MJJIo1JaMIPNH8o-ReJU4nEoHHNn5JfT6fv2TU";
 const SUCCESS_SHEET_NAME = "Orders";
 const FAILED_SHEET_NAME = "Read Failed";
 const SHIPPING_LABELS_SHEET_NAME = "Shipping Labels";
@@ -17,7 +17,7 @@ const SHIPPING_LABEL_HEADERS = [
   "File URL",
 ];
 const SHIPPING_LABEL_DATE_SHEET_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const DEFAULT_GEMINI_MODEL = "gemini-flash-latest";
+const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
 const GEMINI_API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models/";
 const GEMINI_MIN_CONFIDENCE = 70;
 
