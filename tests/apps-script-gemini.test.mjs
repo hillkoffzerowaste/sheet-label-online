@@ -173,6 +173,84 @@ test("parses OCR shipping-label fields into a review-safe label", async () => {
   assert.equal(labels[0].status, "ready");
 });
 
+test("parses a Lazada LEX OCR layout with inline customer and address fields", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "2 lazada.pdf",
+    [
+      "LEXUP0702650797",
+      "Order No.: 1117718175852180",
+      "Customer NAME: Arun Demo",
+      "ADDRESS: 73/1 Moo 13, Ban Pong, Ratchaburi 70110",
+      "Phone number: 660****067",
+      "Lazada",
+    ].join("\n"),
+  );
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].marketplace, "Lazada");
+  assert.equal(labels[0].recipientName, "Arun Demo");
+  assert.equal(labels[0].shippingAddress, "73/1 Moo 13, Ban Pong, Ratchaburi 70110");
+  assert.equal(labels[0].orderId, "1117718175852180");
+  assert.equal(labels[0].trackingNumber, "LEXUP0702650797");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("parses TikTok J&T OCR from a file-name marketplace hint", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "Tik Tok - 4.pdf",
+    [
+      "JTTH201180179874",
+      "Order ID: 585247221484193247",
+      "42 ม 2 ตำบล ขามสมบูรณ์",
+      "คง นครราชสีมา",
+      "30260",
+      "ปวีณา หาญสันเทียะ",
+      "30-07-2026",
+    ].join("\n"),
+  );
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].marketplace, "TikTok Shop");
+  assert.equal(labels[0].recipientName, "ปวีณา หาญสันเทียะ");
+  assert.match(labels[0].shippingAddress, /30260/);
+  assert.equal(labels[0].orderId, "585247221484193247");
+  assert.equal(labels[0].trackingNumber, "JTTH201180179874");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("keeps a multi-label OCR PDF incomplete when identifier counts do not match", async () => {
+  const context = await loadHelpers();
+  const labels = context.buildOcrShippingLabels_(
+    "Tik Tok - 2.pdf",
+    "https://drive/tiktok-two",
+    [
+      "JTTH201180179874",
+      "Order ID: 585247221484193247",
+      "30260",
+      "ปวีณา หาญสันเทียะ",
+      "JTTH201180179875",
+      "Order ID: 585247221484193248",
+    ].join("\n"),
+  );
+
+  assert.equal(labels.length, 2);
+  assert.equal(labels.some((label) => label.reviewReasons.includes("labelCount")), true);
+});
+
+test("accepts OCR text without marketplace branding when the PDF filename identifies TikTok", async () => {
+  const context = await loadHelpers();
+
+  assert.equal(
+    context.isUsefulDriveOcrText_(
+      "Order ID: 585247221484193247\nJTTH201180179874\nปวีณา หาญสันเทียะ",
+      "Tik Tok - 4.pdf",
+    ),
+    true,
+  );
+});
+
 test("parses four Shopee SPX labels from a two-column PDF OCR reading", async () => {
   const context = await loadHelpers();
   const labels = context.parseOcrShippingLabels_(

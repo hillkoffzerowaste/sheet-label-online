@@ -996,9 +996,9 @@ function extractTextWithDriveOcr_(file) {
         { ocr: true, ocrLanguage: ocrLanguages[languageIndex] },
       );
 
-      var text = waitForDriveOcrText_(converted.id);
+      var text = waitForDriveOcrText_(converted.id, file.getName());
       if (text.length > bestText.length) bestText = text;
-      if (isUsefulDriveOcrText_(text)) return text;
+      if (isUsefulDriveOcrText_(text, file.getName())) return text;
     } catch (error) {
       lastError = error;
     } finally {
@@ -1010,7 +1010,7 @@ function extractTextWithDriveOcr_(file) {
     }
   }
 
-  if (isUsefulDriveOcrText_(bestText)) return bestText;
+  if (isUsefulDriveOcrText_(bestText, file.getName())) return bestText;
   if (lastError) {
     throw createProcessingError_(
       "DriveOcrError",
@@ -1025,28 +1025,35 @@ function extractTextWithDriveOcr_(file) {
   );
 }
 
-function waitForDriveOcrText_(documentId) {
+function waitForDriveOcrText_(documentId, fileName) {
   var lastText = "";
   for (var attempt = 0; attempt < 4; attempt++) {
     lastText = DocumentApp.openById(documentId).getBody().getText() || "";
-    if (isUsefulDriveOcrText_(lastText)) return lastText;
+    if (isUsefulDriveOcrText_(lastText, fileName)) return lastText;
     if (attempt < 3) Utilities.sleep(1000);
   }
   return lastText;
 }
 
-function isUsefulDriveOcrText_(text) {
-  var value = String(text || "").trim();
+function isUsefulDriveOcrText_(text, fileName) {
+  var value = normalizeOcrText_(text).trim();
+  var fileValue = normalizeOcrText_(fileName).toLowerCase();
   if (value.length < 30) return false;
   return (
-    /shopee|lazada|tiktok/i.test(value) &&
-    (/\bTH\d{8,}[A-Z]\b/i.test(value) ||
+    (/shopee|lazada|tiktok/i.test(value) || /shopee|lazada|tik[\s_-]*tok/i.test(fileValue)) &&
+    (/\b(?:TH|JTTH|LEX)[A-Z0-9-]{6,}\b/i.test(value) ||
       /order\s*(?:no\.?|id)|เลขที่คำสั่งซื้อ|หมายเลขคำสั่งซื้อ/i.test(value))
   );
 }
 
+function normalizeOcrText_(text) {
+  return String(text || "")
+    .replace(/[\u0000\u000b\u000c\u00a0]/g, " ")
+    .replace(/[ \t]+/g, " ");
+}
+
 function detectMarketplace(text) {
-  const value = String(text || "").toLowerCase();
+  const value = normalizeOcrText_(text).toLowerCase();
 
   if (value.indexOf("shopee") >= 0) return "Shopee";
   if (value.indexOf("lazada") >= 0) return "Lazada";
@@ -1054,6 +1061,20 @@ function detectMarketplace(text) {
     return "TikTok Shop";
   }
 
+  return "Unknown";
+}
+
+function detectMarketplaceForFile_(fileName, text) {
+  var marketplace = detectMarketplace(text);
+  if (marketplace !== "Unknown") return marketplace;
+
+  var fileValue = normalizeOcrText_(fileName).toLowerCase();
+  var textValue = normalizeOcrText_(text).toLowerCase();
+  if (/shopee/.test(fileValue)) return "Shopee";
+  if (/lazada|lex/.test(fileValue) || /\blex[a-z0-9-]{6,}/i.test(textValue)) return "Lazada";
+  if (/tik[\s_-]*tok/.test(fileValue) || /\bjtth[a-z0-9-]{6,}/i.test(textValue)) {
+    return "TikTok Shop";
+  }
   return "Unknown";
 }
 
@@ -1525,7 +1546,7 @@ function isGeminiQuotaError_(status, bodyText) {
 }
 
 function buildOcrOrder_(fileName, fileUrl, text) {
-  const marketplace = detectMarketplace(text);
+  const marketplace = detectMarketplaceForFile_(fileName, text);
   const order = parseOcrOrder_(marketplace, text);
   const validation = validateOrder(order);
 
@@ -1542,7 +1563,11 @@ function buildOcrOrder_(fileName, fileUrl, text) {
 }
 
 function buildOcrShippingLabels_(fileName, fileUrl, text) {
-  const labels = parseOcrShippingLabels_(fileName, text);
+  const labels = ensureOcrLabelCompleteness_(
+    fileName,
+    text,
+    parseOcrShippingLabels_(fileName, text),
+  );
   labels.forEach(function (label) {
     label.fileUrl = fileUrl;
     label.source = "drive-ocr";
@@ -1550,17 +1575,74 @@ function buildOcrShippingLabels_(fileName, fileUrl, text) {
   return labels;
 }
 
+function ensureOcrLabelCompleteness_(fileName, text, labels) {
+  var value = normalizeOcrText_(text);
+  var marketplace = detectMarketplaceForFile_(fileName, value);
+  var expectedCount = 0;
+  if (marketplace === "Shopee") {
+    var shopeeOrderIds = uniqueValues_(collectRegexValues_(
+      value,
+      /Shopee\s+Order\s+No\.?\s*:?[ \t]*([A-Z0-9-]+)/gi,
+    )).filter(function (orderId) {
+      return /^\d{6,}[A-Z0-9-]+$/i.test(orderId);
+    });
+    expectedCount = Math.max(
+      uniqueValues_(collectRegexValues_(value, /\bTH[A-Z0-9-]{8,}\b/gi)).length,
+      shopeeOrderIds.length,
+      Array.isArray(labels) ? labels.length : 0,
+    );
+  } else if (marketplace === "Lazada") {
+    expectedCount = Math.max(
+      uniqueValues_(collectRegexValues_(value, /(?:LAZADA\s+)?Order\s+(?:No\.?|Number)\s*:\s*([A-Z0-9-]+)/gi)).length,
+      uniqueValues_(collectRegexValues_(value, /\bLEX[A-Z0-9-]{6,}\b/gi)).length,
+    );
+  } else if (marketplace === "TikTok Shop") {
+    expectedCount = Math.max(
+      uniqueValues_(collectRegexValues_(value, /Order\s*ID\s*:\s*([A-Z0-9-]+)/gi)).length,
+      uniqueValues_(collectRegexValues_(value, /\bJTTH[A-Z0-9-]{6,}\b/gi)).length,
+    );
+  }
+
+  var candidates = Array.isArray(labels) ? labels.slice() : [];
+  var missingCount = expectedCount - candidates.length;
+  for (var index = 0; index < missingCount; index++) {
+    candidates.push({
+      id: fileName + "-missing-" + (index + 1),
+      sourceFileName: fileName,
+      marketplace: marketplace,
+      recipientName: "",
+      shippingAddress: "",
+      orderId: "",
+      trackingNumber: "",
+      status: "review",
+      reviewReasons: ["labelCount"],
+    });
+  }
+  return candidates;
+}
+
 function readOcrField_(text, aliases) {
-  var lines = String(text || "").split(/\r?\n/);
+  var lines = normalizeOcrText_(text).split(/\r?\n/);
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim();
     for (var j = 0; j < aliases.length; j++) {
       var escaped = aliases[j].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      var match = new RegExp("^" + escaped + "\\s*:\\s*(.*)", "i").exec(line);
+      var match = new RegExp("^" + escaped + "(?:\\s+(?:NAME|NUMBER))?\\s*:\\s*(.*)", "i").exec(line);
       if (match && match[1].trim()) return match[1].trim();
     }
   }
   return "";
+}
+
+function readOcrInlineField_(text, pattern) {
+  var match = new RegExp(pattern, "im").exec(normalizeOcrText_(text));
+  return match && match[1] ? match[1].trim() : "";
+}
+
+function readOcrBlockField_(text, startPattern, endPattern) {
+  var value = normalizeOcrText_(text);
+  var match = new RegExp(startPattern + "\\s*:?\\s*([\\s\\S]*?)(?:" + endPattern + "|$)", "i").exec(value);
+  return match && match[1] ? match[1].replace(/\s+/g, " ").trim() : "";
 }
 
 function parseOcrOrder_(marketplace, text) {
@@ -1598,10 +1680,16 @@ function parseOcrOrder_(marketplace, text) {
 }
 
 function parseOcrShippingLabels_(fileName, text) {
-  var marketplace = detectMarketplace(text);
+  var marketplace = detectMarketplaceForFile_(fileName, text);
 
   if (marketplace === "Shopee") {
     return parseShopeeOcrShippingLabels_(fileName, text);
+  }
+  if (marketplace === "Lazada") {
+    return parseLazadaOcrShippingLabels_(fileName, text);
+  }
+  if (marketplace === "TikTok Shop") {
+    return parseTikTokOcrShippingLabels_(fileName, text);
   }
 
   var recipientName = readOcrField_(text, ["Recipient", "Receiver", "To", "Customer"]);
@@ -1647,8 +1735,97 @@ function parseOcrShippingLabels_(fileName, text) {
   ]);
 }
 
+function parseLazadaOcrShippingLabels_(fileName, text) {
+  var value = normalizeOcrText_(text);
+  var trackingMatch = /\bLEX[A-Z0-9-]{6,}\b/i.exec(value);
+  var recipientName = readOcrInlineField_(value, "Customer\\s*(?:NAME)?\\s*:\\s*([^\\r\\n]+)") ||
+    readOcrField_(value, ["Receiver", "Customer"]);
+  var shippingAddress = readOcrBlockField_(
+    value,
+    "(?:ADDRESS|ที่อยู่)\\s*",
+    "\\n[^\\n]*(?:Phone number|Seller Name|Payment Type)\\s*:",
+  ) || readOcrField_(value, ["Address"]);
+  var orderId = readOcrInlineField_(value, "(?:LAZADA\\s+)?Order\\s+(?:No\\.?|Number)\\s*:\\s*([A-Z0-9-]+)") ||
+    readOcrField_(value, ["LAZADA Order Number", "Order No."]);
+  var label = {
+    marketplace: "Lazada",
+    recipientName: recipientName,
+    shippingAddress: shippingAddress,
+    orderId: orderId,
+    trackingNumber: trackingMatch ? trackingMatch[0] : readOcrField_(value, ["Tracking"]),
+  };
+  return normalizeShippingLabels_(fileName, [label]);
+}
+
+function parseTikTokOcrShippingLabels_(fileName, text) {
+  var value = normalizeOcrText_(text);
+  var lines = value.split(/\r?\n/).map(function (line) { return line.trim(); });
+  var trackingMatch = /\bJTTH[A-Z0-9-]{6,}\b/i.exec(value);
+  var postalIndex = -1;
+  for (var i = lines.length - 1; i >= 0; i--) {
+    if (/^\d{5}$/.test(lines[i])) {
+      postalIndex = i;
+      break;
+    }
+  }
+
+  var recipientName = "";
+  if (postalIndex >= 0) {
+    var recipientParts = [];
+    for (var recipientIndex = postalIndex + 1; recipientIndex < lines.length; recipientIndex++) {
+      if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(lines[recipientIndex])) break;
+      if (isTikTokNoiseLine_(lines[recipientIndex])) continue;
+      recipientParts.push(lines[recipientIndex]);
+    }
+    recipientName = recipientParts.join(" ").trim();
+  }
+
+  var leadingAddress = [];
+  var senderIndex = lines.findIndex(function (line) { return /^จาก$/.test(line); });
+  var leadingEnd = senderIndex >= 0 ? senderIndex : postalIndex >= 0 ? postalIndex : lines.length;
+  for (var leadingIndex = 0; leadingIndex < leadingEnd; leadingIndex++) {
+    if (!isTikTokNoiseLine_(lines[leadingIndex])) leadingAddress.push(lines[leadingIndex]);
+  }
+
+  var shippingDateIndex = lines.findIndex(function (line) {
+    return /^Shipping Date\s*:/i.test(line);
+  });
+  var trailingAddress = [];
+  if (shippingDateIndex >= 0) {
+    for (var trailingIndex = shippingDateIndex + 1; trailingIndex < lines.length; trailingIndex++) {
+      if (!isTikTokNoiseLine_(lines[trailingIndex]) && !/^\d{1,2}$|^[A-Z]$/i.test(lines[trailingIndex])) {
+        trailingAddress.push(lines[trailingIndex]);
+      }
+    }
+  }
+
+  var addressParts = leadingAddress.concat(trailingAddress);
+  if (postalIndex >= 0 && addressParts.indexOf(lines[postalIndex]) < 0) {
+    addressParts.push(lines[postalIndex]);
+  }
+
+  return normalizeShippingLabels_(fileName, [{
+    marketplace: "TikTok Shop",
+    recipientName: recipientName,
+    shippingAddress: addressParts.join(" ").replace(/\s+/g, " ").trim(),
+    orderId: readOcrInlineField_(value, "Order\\s*ID\\s*:\\s*([A-Z0-9-]+)"),
+    trackingNumber: trackingMatch ? trackingMatch[0] : "",
+  }]);
+}
+
+function isTikTokNoiseLine_(line) {
+  var value = String(line || "").trim();
+  return (
+    !value ||
+    /^V$|^จาก$|^ถึง$|^COD$|^PICK[- ]?UP$|^Order ID/i.test(value) ||
+    /^Estimated Date|^Shipping Date|^người mua/i.test(value) ||
+    /^\(?\+?\d{8,}|^JTTH[A-Z0-9-]{6,}$/i.test(value) ||
+    /^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(value)
+  );
+}
+
 function parseShopeeOcrShippingLabels_(fileName, text) {
-  var value = normalizePdfTextForParsing_(text);
+  var value = normalizePdfTextForParsing_(normalizeOcrText_(text));
   var recipientMarkers = collectRegexMatches_(
     value,
     /ผู้รับ\s*\(\s*TO\s*\)/gi,
@@ -1660,7 +1837,7 @@ function parseShopeeOcrShippingLabels_(fileName, text) {
 
   var trackingEntries = [];
   var trackingSeen = {};
-  collectRegexMatches_(value, /\bTH\d{8,}[A-Z]\b/gi).forEach(function (match) {
+  collectRegexMatches_(value, /\bTH[A-Z0-9-]{8,}\b/gi).forEach(function (match) {
     var trackingNumber = match[0].trim();
     if (trackingSeen[trackingNumber]) return;
     trackingSeen[trackingNumber] = true;
@@ -1672,7 +1849,7 @@ function parseShopeeOcrShippingLabels_(fileName, text) {
       /Shopee\s+Order\s+No\.?\s*:?\s*([A-Z0-9-]+)/gi,
     ),
   ).filter(function (orderId) {
-    return /^\d{7,}[A-Z0-9-]+$/i.test(orderId);
+    return /^\d{6,}[A-Z0-9-]+$/i.test(orderId);
   });
 
   var values = recipientMarkers.map(function (marker, index) {
