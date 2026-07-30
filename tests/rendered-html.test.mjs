@@ -36,6 +36,9 @@ test("server-renders the PDF order intake dashboard", async () => {
   assert.match(html, /อัปโหลด PDF/);
   assert.match(html, /Google Drive/);
   assert.match(html, /Gemini/);
+  assert.match(html, /รัน PDF \(OCR\)/);
+  assert.match(html, /ใช้ Gemini/);
+  assert.match(html, /อาจใช้โควต้า Gemini/);
   assert.match(html, /ความมั่นใจ/);
   assert.match(html, /ตรวจ Order ID ซ้ำ/);
   assert.match(html, /ข้อมูลครบ/);

@@ -28,7 +28,7 @@ const ORDER_EXTRACTION_PROMPT = [
   "marketplace must be one of shopee, lazada, tiktok-shop, or unknown.",
   "quantity is the sum of all item quantities. total must be numeric without a currency symbol.",
   "confidence is an integer from 0 through 100.",
-].join("\\n");
+].join("\n");
 
 const GEMINI_ORDER_SCHEMA = {
   type: "object",
@@ -91,7 +91,7 @@ const SHIPPING_LABEL_EXTRACTION_PROMPT = [
   "For Lazada LEX, never use the Sender section or Seller Name as the recipient.",
   "For Lazada LEX, orderId is the value after LAZADA Order Number: or Order No.:.",
   "For Lazada LEX, trackingNumber is the complete alphanumeric value below the top barcode, usually beginning with LEX; do not return the standalone LEX logo text.",
-].join("\\n");
+].join("\n");
 
 const GEMINI_SHIPPING_LABEL_SCHEMA = {
   type: "array",
@@ -115,7 +115,17 @@ const GEMINI_SHIPPING_LABEL_SCHEMA = {
 };
 
 function doPost(e) {
-  const payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+  let payload;
+  try {
+    payload = JSON.parse((e && e.postData && e.postData.contents) || "{}");
+  } catch (_) {
+    return jsonResponse_({ ok: false, message: "Invalid JSON body" });
+  }
+
+  if (!isAuthorizedRequest_(payload.token)) {
+    return jsonResponse_({ ok: false, message: "Unauthorized" });
+  }
+
   const fileId = payload.fileId;
 
   if (!fileId) {
@@ -125,7 +135,21 @@ function doPost(e) {
     });
   }
 
-  const result = processDriveFile(fileId);
+  const mode = payload.mode || "ocr";
+  if (mode !== "ocr" && mode !== "gemini") {
+    return jsonResponse_({ ok: false, message: "mode must be ocr or gemini" });
+  }
+
+  const cachedResult = getCachedRequestResult_(payload.requestId, mode);
+  if (cachedResult) {
+    return jsonResponse_({ ok: cachedResult.status === "ready", result: cachedResult, cached: true });
+  }
+
+  const result = mode === "gemini"
+    ? processDriveFileWithGemini(fileId, payload.requestId)
+    : processDriveFile(fileId, payload.requestId);
+  logProcessingResult_(fileId, mode, result, payload.requestId);
+  putCachedRequestResult_(payload.requestId, mode, result);
   return jsonResponse_({
     ok: result.status === "ready",
     result,
@@ -138,7 +162,10 @@ function processInputFolder() {
   const results = [];
 
   while (files.hasNext()) {
-    results.push(processDriveFile(files.next().getId()));
+    const file = files.next();
+    const result = processDriveFile(file.getId());
+    logProcessingResult_(file.getId(), "ocr", result, "");
+    results.push(result);
   }
 
   return results;
@@ -147,7 +174,8 @@ function processInputFolder() {
 function onSpreadsheetOpen() {
   SpreadsheetApp.getUi()
     .createMenu("PDF")
-    .addItem("รีเฟรช PDF ตอนนี้", "refreshNow")
+    .addItem("รีเฟรช PDF ตอนนี้ (OCR)", "refreshNow")
+    .addItem("เรียก Gemini กับ PDF ใน Review", "refreshWithGemini")
     .addToUi();
 }
 
@@ -195,7 +223,7 @@ function setupPdfProcessingTrigger() {
     .create();
 }
 
-function processDriveFile(fileId) {
+function processDriveFile(fileId, requestId) {
   const file = DriveApp.getFileById(fileId);
 
   var ocrText = null;
@@ -217,64 +245,88 @@ function processDriveFile(fileId) {
     var ocrLabels = ocrTextAvailable
       ? buildOcrShippingLabels_(file.getName(), file.getUrl(), getOcrText_())
       : [];
-    let shippingExport;
-    if (isUsableOcrShippingLabels_(ocrLabels)) {
-      shippingExport = writeShippingLabelCandidates_(ocrLabels, file.getUrl());
-    } else {
-      try {
-        shippingExport = exportShippingLabels_(file);
-      } catch (error) {
-        if (ocrLabels.length > 0 && isGeminiQuotaProcessingError_(error)) {
-          shippingExport = writeShippingLabelCandidates_(ocrLabels, file.getUrl());
-        } else if (isRetryableError_(error)) {
-          throw error;
-        } else {
-          const reviewLabels = ocrLabels.length
-            ? ocrLabels
-            : prepareShippingLabelsForExport_(file.getName(), []);
-          shippingExport = writeShippingLabelCandidates_(reviewLabels, file.getUrl());
-        }
-      }
-    }
+    var reviewLabels = ocrLabels.length
+      ? ocrLabels
+      : prepareShippingLabelsForExport_(file.getName(), []);
+    var shippingExport = writeShippingLabelCandidates_(reviewLabels, file.getUrl());
+    var order = ocrTextAvailable
+      ? buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_())
+      : buildOcrOrder_(file.getName(), file.getUrl(), "");
 
-    try {
-      var ocrOrder = ocrTextAvailable
-        ? buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_())
-        : null;
-      let order = ocrOrder;
-      if (!isUsableOcrOrder_(ocrOrder)) {
-        try {
-          order = extractOrderWithGemini_(file);
-        } catch (error) {
-          if (ocrOrder && (isGeminiQuotaProcessingError_(error) || !isRetryableError_(error))) {
-            order = ocrOrder;
-          } else {
-            throw error;
-          }
-        }
-      }
-
-      return finalizeOrderResult_(order, file, shippingExport.inserted);
-    } catch (error) {
-      if (isRetryableError_(error)) {
-        return buildRetryableProcessingResult_(file, error, shippingExport.inserted);
-      }
-
-      const order = buildFailedOrder_(file, error);
-      order.shippingLabelsExported = shippingExport.inserted;
-      writeOrderResult_(order);
-      moveToProcessed(file);
-      return order;
-    }
+    return finalizeOrderResult_(order, file, shippingExport.inserted, shippingExport.review === 0);
   } catch (error) {
     if (isRetryableError_(error)) {
-      return buildRetryableProcessingResult_(file, error, 0);
+      return buildRetryableProcessingResult_(file, error, 0, "drive-ocr", requestId);
     }
 
-    const order = buildFailedOrder_(file, error);
+    const order = buildFailedOrder_(file, error, "drive-ocr");
     writeOrderResult_(order);
-    moveToProcessed(file);
+    moveToReview(file);
     return order;
+  }
+}
+
+function processDriveFileWithGemini(fileId, requestId) {
+  const file = DriveApp.getFileById(fileId);
+  var shippingExport = { inserted: 0, total: 0, review: 1 };
+
+  try {
+    var labels = prepareShippingLabelsForExport_(
+      file.getName(),
+      extractShippingLabelsWithGemini_(file),
+    );
+    shippingExport = writeShippingLabelCandidates_(labels, file.getUrl());
+  } catch (error) {
+    if (isRetryableError_(error)) {
+      return buildRetryableProcessingResult_(file, error, 0, "gemini", requestId);
+    }
+    shippingExport = writeShippingLabelCandidates_(
+      prepareShippingLabelsForExport_(file.getName(), []),
+      file.getUrl(),
+    );
+  }
+
+  try {
+    var order = extractOrderWithGemini_(file);
+    return finalizeOrderResult_(order, file, shippingExport.inserted, shippingExport.review === 0);
+  } catch (error) {
+    if (isRetryableError_(error)) {
+      return buildRetryableProcessingResult_(file, error, shippingExport.inserted, "gemini", requestId);
+    }
+
+    var failedOrder = buildFailedOrder_(file, error, "gemini");
+    failedOrder.shippingLabelsExported = shippingExport.inserted;
+    writeOrderResult_(failedOrder);
+    moveToReview(file);
+    return failedOrder;
+  }
+}
+
+function refreshWithGemini() {
+  const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+  spreadsheet.toast("กำลังเรียก Gemini กับ PDF ใน Review...", "PDF", 5);
+
+  try {
+    const results = listPdfFiles_(getReviewFolderId_(), "review").map(function (pdf) {
+      const result = processDriveFileWithGemini(pdf.fileId);
+      logProcessingResult_(pdf.fileId, "gemini", result, "");
+      return result;
+    });
+    const ready = results.filter(function (result) {
+      return result && result.status === "ready";
+    }).length;
+    const retryable = results.filter(function (result) {
+      return result && result.retryable === true;
+    }).length;
+    spreadsheet.toast(
+      "Gemini เสร็จแล้ว: " + results.length + " ไฟล์ | พร้อมใช้ " + ready + " | ลองใหม่ " + retryable,
+      "PDF",
+      8,
+    );
+    return results;
+  } catch (error) {
+    spreadsheet.toast("เรียก Gemini ไม่สำเร็จ กรุณาตรวจ Execution log", "PDF", 8);
+    throw error;
   }
 }
 
@@ -292,6 +344,92 @@ function isUsableOcrShippingLabels_(labels) {
   });
 }
 
+function doGet(e) {
+  const parameters = (e && e.parameter) || {};
+  if (!isAuthorizedRequest_(parameters.token)) {
+    return jsonResponse_({ ok: false, message: "Unauthorized" });
+  }
+
+  if (parameters.action !== "listPdfs") {
+    return jsonResponse_({ ok: false, message: "Unsupported action" });
+  }
+
+  const files = listPdfFiles_(INPUT_FOLDER_ID, "input");
+  const reviewFolderId = getReviewFolderId_();
+  if (reviewFolderId && reviewFolderId !== INPUT_FOLDER_ID) {
+    files.push.apply(files, listPdfFiles_(reviewFolderId, "review"));
+  }
+
+  return jsonResponse_({ ok: true, files });
+}
+
+function listPdfFiles_(folderId, location) {
+  if (!folderId) return [];
+  const folder = DriveApp.getFolderById(folderId);
+  const iterator = folder.getFilesByType(MimeType.PDF);
+  const files = [];
+
+  while (iterator.hasNext()) {
+    const file = iterator.next();
+    files.push({
+      fileId: file.getId(),
+      fileName: file.getName(),
+      modifiedAt: file.getLastUpdated().toISOString(),
+      location,
+      url: file.getUrl(),
+    });
+  }
+
+  return files.sort(function (left, right) {
+    return String(right.modifiedAt).localeCompare(String(left.modifiedAt));
+  });
+}
+
+function getReviewFolderId_() {
+  const properties = PropertiesService.getScriptProperties();
+  return properties.getProperty("REVIEW_FOLDER_ID") || "";
+}
+
+function isAuthorizedRequest_(token) {
+  const configuredSecret = PropertiesService.getScriptProperties().getProperty("APPS_SCRIPT_SHARED_SECRET");
+  return !configuredSecret || String(token || "") === configuredSecret;
+}
+
+function getCachedRequestResult_(requestId, mode) {
+  if (!requestId || typeof CacheService === "undefined") return null;
+  const value = CacheService.getScriptCache().get("pdf-request:" + mode + ":" + requestId);
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function putCachedRequestResult_(requestId, mode, result) {
+  if (!requestId || typeof CacheService === "undefined") return;
+  CacheService.getScriptCache().put(
+    "pdf-request:" + mode + ":" + requestId,
+    JSON.stringify(result),
+    600,
+  );
+}
+
+function logProcessingResult_(fileId, mode, result, requestId) {
+  console.log(JSON.stringify({
+    fileId: fileId || "",
+    fileName: result && result.fileName ? result.fileName : "",
+    mode: mode || "ocr",
+    source: result && result.source ? result.source : "",
+    status: result && result.status ? result.status : "failed",
+    inserted: result && Number.isFinite(result.shippingLabelsExported)
+      ? result.shippingLabelsExported
+      : 0,
+    retryable: Boolean(result && result.retryable),
+    requestId: requestId || "",
+  }));
+}
+
 function isUsableOcrOrder_(order) {
   return Boolean(
     order &&
@@ -302,29 +440,54 @@ function isUsableOcrOrder_(order) {
 }
 
 function writeShippingLabelCandidates_(labels, fileUrl) {
-  const result = writeShippingLabels_(labels, fileUrl);
+  const candidates = Array.isArray(labels) ? labels : [];
+  const result = writeShippingLabels_(candidates, fileUrl);
   return {
-    inserted: result && Number.isFinite(result.inserted) ? result.inserted : labels.length,
-    total: labels.length,
+    inserted: result && Number.isFinite(result.inserted) ? result.inserted : candidates.length,
+    total: candidates.length,
+    review: candidates.filter(function (label) { return label.status === "review"; }).length,
   };
 }
 
-function finalizeOrderResult_(order, file, shippingLabelsExported) {
+function finalizeOrderResult_(order, file, shippingLabelsExported, canMoveToProcessed) {
   order.fileName = file.getName();
   order.fileUrl = file.getUrl();
 
-  const classification = classifyGeminiOrder_(
-    order,
-    Boolean(order.orderId && isDuplicateOrder(order.orderId)),
-  );
+  const isDuplicate = Boolean(order.orderId && isDuplicateOrder(order.orderId));
+  const classification = order.source === "gemini"
+    ? classifyGeminiOrder_(order, isDuplicate)
+    : classifyOcrOrder_(order, isDuplicate);
   order.status = classification.status;
   order.reason = classification.reason;
   order.missingFields = classification.missingFields;
   order.shippingLabelsExported = shippingLabelsExported;
 
   writeOrderResult_(order);
-  moveToProcessed(file);
+  if (order.status === "ready" && canMoveToProcessed !== false) {
+    moveToProcessed(file);
+  } else {
+    moveToReview(file);
+  }
   return order;
+}
+
+function classifyOcrOrder_(order, isDuplicate) {
+  if (isDuplicate) {
+    return {
+      status: "duplicate",
+      reason: "Order ID ซ้ำ",
+      missingFields: [],
+    };
+  }
+
+  const validation = validateOrder(order);
+  return validation.complete
+    ? { status: "ready", reason: "ข้อมูลครบ", missingFields: [] }
+    : {
+        status: "incomplete",
+        reason: "Drive OCR อ่านข้อมูลไม่ครบ: " + validation.missingFields.join(", "),
+        missingFields: validation.missingFields,
+      };
 }
 
 function exportShippingLabels_(file) {
@@ -365,7 +528,7 @@ function prepareShippingLabelsForExport_(fileName, values) {
   ];
 }
 
-function buildRetryableProcessingResult_(file, error, shippingLabelsExported) {
+function buildRetryableProcessingResult_(file, error, shippingLabelsExported, source, requestId) {
   console.error("Retryable PDF processing error", {
     fileId: file.getId ? file.getId() : "unknown",
     errorName: error && error.name,
@@ -381,16 +544,18 @@ function buildRetryableProcessingResult_(file, error, shippingLabelsExported) {
     items: [],
     total: "",
     address: "",
-    source: "gemini",
+    source: source || "gemini",
     confidence: 0,
     missingFields: [],
     shippingLabelsExported,
     status: "failed",
     reason: error && error.message ? error.message : "Retryable PDF processing error",
+    retryable: true,
+    requestId: requestId || "",
   };
 }
 
-function buildFailedOrder_(file, error) {
+function buildFailedOrder_(file, error, source) {
   return {
     fileName: file.getName(),
     fileUrl: file.getUrl(),
@@ -400,12 +565,12 @@ function buildFailedOrder_(file, error) {
     items: [],
     total: "",
     address: "",
-    source: "gemini",
+    source: source || "gemini",
     confidence: 0,
     missingFields: [],
     status: "failed",
     reason:
-      "Gemini อ่าน PDF ไม่สำเร็จ: " +
+      (source === "drive-ocr" ? "Drive OCR อ่าน PDF ไม่สำเร็จ: " : "Gemini อ่าน PDF ไม่สำเร็จ: ") +
       (error && error.message ? error.message : "ไม่ทราบสาเหตุ"),
   };
 }
@@ -1167,6 +1332,20 @@ function uniqueValues_(values) {
 function moveToProcessed(file) {
   const processedFolder = DriveApp.getFolderById(PROCESSED_FOLDER_ID);
   file.moveTo(processedFolder);
+}
+
+function moveToReview(file) {
+  const reviewFolderId = getReviewFolderId_();
+  if (!reviewFolderId) {
+    throw createProcessingError_(
+      "ReviewFolderConfigurationError",
+      "ยังไม่ได้ตั้งค่า REVIEW_FOLDER_ID",
+      true,
+    );
+  }
+
+  const reviewFolder = DriveApp.getFolderById(reviewFolderId);
+  file.moveTo(reviewFolder);
 }
 
 function getSheet_(sheetName) {

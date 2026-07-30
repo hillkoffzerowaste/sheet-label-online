@@ -67,6 +67,38 @@ test("recognizes Gemini quota responses without treating other errors as quota",
   assert.equal(context.isGeminiQuotaError_(400, "invalid argument"), false);
 });
 
+test("routes doPost to OCR by default and Gemini only for explicit mode", async () => {
+  const context = await loadHelpers();
+  const calls = [];
+  context.PropertiesService = {
+    getScriptProperties: () => ({
+      getProperty: (key) => (key === "APPS_SCRIPT_SHARED_SECRET" ? "test-secret" : null),
+    }),
+  };
+  context.ContentService = {
+    MimeType: { JSON: "application/json" },
+    createTextOutput: (value) => ({
+      value,
+      setMimeType() { return this; },
+    }),
+  };
+  context.processDriveFile = (fileId) => {
+    calls.push(["ocr", fileId]);
+    return { status: "ready", source: "drive-ocr" };
+  };
+  context.processDriveFileWithGemini = (fileId) => {
+    calls.push(["gemini", fileId]);
+    return { status: "ready", source: "gemini" };
+  };
+
+  const run = (payload) => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(payload) } }).value);
+
+  assert.equal(run({ fileId: "ocr-file", token: "test-secret" }).result.source, "drive-ocr");
+  assert.equal(run({ fileId: "gemini-file", mode: "gemini", token: "test-secret" }).result.source, "gemini");
+  assert.equal(run({ fileId: "bad-mode", mode: "other", token: "test-secret" }).ok, false);
+  assert.deepEqual(calls, [["ocr", "ocr-file"], ["gemini", "gemini-file"]]);
+});
+
 test("marks an OCR order with drive-ocr source and review when fields are missing", async () => {
   const context = await loadHelpers();
   const order = context.buildOcrOrder_(
@@ -135,7 +167,7 @@ test("parses OCR shipping-label fields into a review-safe label", async () => {
   assert.equal(labels[0].status, "ready");
 });
 
-test("uses Drive OCR once when Gemini quota is exhausted", async () => {
+test("uses Drive OCR once without calling Gemini when quota is exhausted", async () => {
   const context = await loadHelpers();
   let ocrCalls = 0;
   let movedToProcessed = false;
@@ -162,12 +194,13 @@ test("uses Drive OCR once when Gemini quota is exhausted", async () => {
   context.moveToProcessed = () => {
     movedToProcessed = true;
   };
+  context.moveToReview = () => {};
 
   const result = context.processDriveFile("fixture-id");
 
   assert.equal(ocrCalls, 1);
   assert.equal(result.source, "drive-ocr");
-  assert.equal(movedToProcessed, true);
+  assert.equal(movedToProcessed, false);
 });
 
 test("trashes the temporary OCR document even when OCR text reading fails", async () => {
@@ -215,7 +248,7 @@ test("trashes the temporary OCR document even when OCR text reading fails", asyn
   assert.equal(copyOptions.options.ocrLanguage, "th");
 });
 
-test("uses readable OCR shipping labels before calling Gemini", async () => {
+test("uses readable OCR shipping labels without calling Gemini", async () => {
   const context = await loadHelpers();
   let ocrCalls = 0;
   let shippingGeminiCalls = 0;
@@ -258,16 +291,17 @@ test("uses readable OCR shipping labels before calling Gemini", async () => {
   context.writeOrderResult_ = () => {};
   context.isDuplicateOrder = () => false;
   context.moveToProcessed = () => {};
+  context.moveToReview = () => {};
 
   context.processDriveFile("ocr-first-id");
 
   assert.equal(ocrCalls, 1);
   assert.equal(shippingGeminiCalls, 0);
-  assert.equal(orderGeminiCalls, 1);
+  assert.equal(orderGeminiCalls, 0);
   assert.equal(writtenLabels[0].source, "drive-ocr");
 });
 
-test("calls Gemini after OCR cannot produce a usable shipping label", async () => {
+test("calls Gemini only when the explicit Gemini mode is selected", async () => {
   const context = await loadHelpers();
   let shippingGeminiCalls = 0;
   let orderGeminiCalls = 0;
@@ -310,8 +344,15 @@ test("calls Gemini after OCR cannot produce a usable shipping label", async () =
   context.writeOrderResult_ = () => {};
   context.isDuplicateOrder = () => false;
   context.moveToProcessed = () => {};
+  context.moveToReview = () => {};
 
+  context.moveToProcessed = () => {};
   context.processDriveFile("ocr-incomplete-id");
+
+  assert.equal(shippingGeminiCalls, 0);
+  assert.equal(orderGeminiCalls, 0);
+
+  context.processDriveFileWithGemini("ocr-incomplete-id");
 
   assert.equal(shippingGeminiCalls, 1);
   assert.equal(orderGeminiCalls, 1);
@@ -462,12 +503,13 @@ test("exports shipping labels even when order extraction fails", async () => {
     movedToProcessed = true;
   };
 
-  const result = context.processDriveFile("fixture-id");
+  context.moveToReview = () => {};
+  const result = context.processDriveFileWithGemini("fixture-id");
 
   assert.equal(result.status, "failed");
   assert.equal(exportedLabels.length, 1);
   assert.equal(exportedLabels[0].orderId, "260728AAA111");
-  assert.equal(movedToProcessed, true);
+  assert.equal(movedToProcessed, false);
 });
 
 test("writes a review shipping row when label extraction is malformed", async () => {
@@ -491,7 +533,8 @@ test("writes a review shipping row when label extraction is malformed", async ()
   context.writeOrderResult_ = () => {};
   context.moveToProcessed = () => {};
 
-  const result = context.processDriveFile("malformed-id");
+  context.moveToReview = () => {};
+  const result = context.processDriveFileWithGemini("malformed-id");
 
   assert.equal(result.status, "failed");
   assert.equal(exportedLabels.length, 1);

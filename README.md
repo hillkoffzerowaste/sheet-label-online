@@ -35,11 +35,11 @@ Apps Script ใน `apps-script/Code.gs` เป็นผู้ประมวล
 
 1. ตรวจ PDF ใน Google Drive input folder
 2. อ่านใบปะหน้าจาก Shopee, Lazada หรือ TikTok Shop
-3. ใช้ Gemini เมื่อ parser ต้องการข้อมูลโครงสร้างจาก PDF
+3. ตรวจข้อมูลที่ OCR อ่านได้และแยกข้อมูลตาม marketplace
 4. ตรวจข้อมูลที่จำเป็นและหมายเลขซ้ำ
-5. เขียนผลลัพธ์ลง Google Sheet แล้วจึงย้าย PDF ที่บันทึกสำเร็จไป Processed folder
+5. เขียนผลลัพธ์ลง Google Sheet แล้วจึงย้าย PDF ที่ข้อมูลครบไป Processed folder
 
-Web App ไม่มี API key และไม่เริ่มประมวลผล PDF ใน production; หน้าจอมีไว้แสดงข้อมูลใบปะหน้ามาตรฐานและเปิด Google Sheet เท่านั้น
+หาก OCR อ่านข้อมูลไม่ครบ ระบบจะเขียนสถานะ `review` และย้ายไฟล์ไป Review folder. Gemini จะไม่ถูกเรียกจาก trigger หรือปุ่มรีเฟรช OCR; ต้องกดปุ่ม `ใช้ Gemini` ต่อไฟล์จากหน้าเว็บ หรือใช้เมนู Gemini ใน Apps Script เองเท่านั้น.
 
 ## Google Apps Script setup
 
@@ -56,11 +56,13 @@ const SPREADSHEET_ID = "PASTE_SPREADSHEET_ID";
 ```text
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_MODEL=gemini-3.1-flash-lite
+REVIEW_FOLDER_ID=your-review-folder-id
+APPS_SCRIPT_SHARED_SECRET=long-random-shared-secret
 ```
 
-เปิดใช้ OCR ใน Apps Script editor ด้วยเมนู **บริการ (+) → Drive API → เพิ่ม**. หากระบบพาไป Google Cloud Console ให้เปิด Google Drive API ด้วย. ระบบจะลอง Google Drive OCR ก่อน และเรียก Gemini เฉพาะเมื่อ OCR แปลงไม่ได้หรือข้อมูลจำเป็นไม่ครบ. หาก Gemini ตอบว่า quota/rate limit เต็ม ระบบจะเก็บผล OCR ที่อ่านได้เป็น `review` และไม่เรียก Gemini ซ้ำ; ไม่ต้องใช้ API key เพิ่มสำหรับ OCR.
+เปิดใช้ OCR ใน Apps Script editor ด้วยเมนู **บริการ (+) → Drive API → เพิ่ม**. หากระบบพาไป Google Cloud Console ให้เปิด Google Drive API ด้วย. ระบบจะใช้ Google Drive OCR ในรอบปกติเท่านั้น. Gemini จะทำงานเมื่อมีการกดปุ่มหรือเรียก `mode: "gemini"` โดยตรง. หาก Gemini ตอบว่า quota/rate limit เต็ม ระบบจะคงไฟล์ไว้ใน Review เพื่อให้ลองใหม่ได้; ไม่ต้องใช้ API key เพิ่มสำหรับ OCR.
 
-ใน Apps Script editor ให้สร้าง installable **time-driven trigger** ที่เรียก `processInputFolder` ทุก 10 นาที. Trigger นี้เป็นผู้เริ่มการสแกน Drive อัตโนมัติ; Web App ไม่ได้เริ่มการประมวลผลเอง.
+ใน Apps Script editor ให้สร้าง installable **time-driven trigger** ที่เรียก `processInputFolder` ทุก 10 นาที. Trigger นี้เป็นผู้เริ่มการสแกน Drive แบบ OCR-only; Web App จะเรียกเฉพาะ action ที่ผู้ใช้กด. เมนู `PDF` มี `รีเฟรช PDF ตอนนี้ (OCR)` และ `เรียก Gemini กับ PDF ใน Review` แยกกัน.
 
 Apps Script จะเพิ่มแท็บ `Shipping Labels` เมื่อต้องเขียนผลครั้งแรก โดยมีคอลัมน์:
 
@@ -69,7 +71,23 @@ Processed At, Source File, Marketplace, Recipient Name, Shipping Address,
 Order ID, Tracking Number, Status, Review Reasons, File URL
 ```
 
-หาก Gemini หรือ Google Sheet มีความผิดพลาดที่ลองใหม่ได้ ระบบจะคง PDF ไว้ใน input folder สำหรับรอบถัดไป. รายการที่อ่านไม่ครบแต่บันทึกได้จะถูกเก็บเป็น `review` ใน `Shipping Labels` เพื่อไม่ให้ข้อมูลสูญหาย.
+หาก Drive OCR หรือ Gemini มีความผิดพลาดที่ลองใหม่ได้ ระบบจะคง PDF ไว้ในโฟลเดอร์เดิม. รายการที่อ่านไม่ครบจะถูกเก็บเป็น `review` ใน `Shipping Labels` และย้ายไป Review เพื่อไม่ให้ trigger OCR ทำซ้ำทุก 10 นาที.
+
+## Web App PDF actions
+
+หน้าเว็บอ่านรายชื่อ PDF จาก Input และ Review ผ่าน Apps Script Web App แล้วแสดงปุ่มต่อไฟล์:
+
+- `รัน PDF (OCR)` ใช้ Google Drive OCR และไม่เรียก Gemini
+- `ใช้ Gemini` เรียก Gemini เฉพาะไฟล์ที่ผู้ใช้เลือก
+
+หน้าเว็บเรียก Apps Script ผ่าน same-origin route `/api/apps-script` ของ Vercel. ตั้งค่า environment variables แบบ server-only ใน Vercel:
+
+```bash
+APPS_SCRIPT_WEB_APP_URL=https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec
+APPS_SCRIPT_SHARED_SECRET=ใช้ค่าเดียวกับ Script Properties
+```
+
+ตั้ง Apps Script Web App ให้ execute as เจ้าของสคริปต์ และตั้ง `APPS_SCRIPT_SHARED_SECRET` ใน Script Properties ให้ตรงกับ Vercel. ห้ามใช้ `NEXT_PUBLIC_` กับ secret และห้ามใส่ Gemini API key ในหน้าเว็บ.
 
 ## Go to Sheet
 

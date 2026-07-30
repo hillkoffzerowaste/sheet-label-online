@@ -4,7 +4,7 @@ export type { Marketplace } from "./shipping-label";
 
 export type OrderStatus = "ready" | "incomplete" | "duplicate" | "failed";
 
-export type ExtractionSource = "parser" | "gemini";
+export type ExtractionSource = "parser" | "drive-ocr" | "gemini";
 
 export type MissingField =
   | "orderId"

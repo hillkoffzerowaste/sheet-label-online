@@ -1,8 +1,15 @@
 "use client";
 
-import { type ChangeEvent, useMemo, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useState } from "react";
 import { getDestinationSheetUrl } from "../src/destination-sheet";
 import { formatFileSize, getInputDriveUrl, isPdfFile } from "../src/pdf-intake";
+import {
+  type DrivePdf,
+  listDrivePdfs,
+  runDrivePdf,
+  type PdfRunMode,
+  type ProcessingResult,
+} from "../src/apps-script-client";
 import {
   type Marketplace,
   type MarketplaceFilter,
@@ -13,6 +20,12 @@ import {
 
 /** Labels written by Apps Script to the Google Sheet; empty until data arrives. */
 const shippingLabels: ShippingLabel[] = [];
+
+type PdfRunState =
+  | { status: "idle" }
+  | { status: "running"; mode: PdfRunMode }
+  | { status: "success"; mode: PdfRunMode; message: string }
+  | { status: "error"; mode: PdfRunMode; message: string };
 
 const reviewReasonCopy: Record<ReviewReason, string> = {
   marketplace: "ไม่พบ Marketplace",
@@ -35,6 +48,31 @@ export default function Home() {
   const [selectedPdfFiles, setSelectedPdfFiles] = useState<File[]>([]);
   const [fileSelectionMessage, setFileSelectionMessage] = useState("");
   const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const [drivePdfs, setDrivePdfs] = useState<DrivePdf[]>([]);
+  const [driveLoading, setDriveLoading] = useState(true);
+  const [driveError, setDriveError] = useState("");
+  const [pdfRunStates, setPdfRunStates] = useState<Record<string, PdfRunState>>({});
+
+  useEffect(() => {
+    let active = true;
+    listDrivePdfs()
+      .then((files) => {
+        if (!active) return;
+        setDrivePdfs(files);
+        setDriveError("");
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setDriveError(error instanceof Error ? error.message : "โหลดรายการ PDF ไม่สำเร็จ");
+      })
+      .finally(() => {
+        if (active) setDriveLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const filteredLabels = useMemo(
     () => filterShippingLabels(shippingLabels, labelQuery, marketplaceFilter, statusFilter),
@@ -79,6 +117,38 @@ export default function Home() {
       window.setTimeout(() => setCopiedValue(null), 1600);
     } catch {
       setCopiedValue(null);
+    }
+  }
+
+  async function handlePdfRun(file: DrivePdf, mode: PdfRunMode) {
+    const current = pdfRunStates[file.fileId];
+    if (current?.status === "running") return;
+
+    setPdfRunStates((states) => ({
+      ...states,
+      [file.fileId]: { status: "running", mode },
+    }));
+
+    try {
+      const result = await runDrivePdf(file.fileId, mode);
+      setPdfRunStates((states) => ({
+        ...states,
+        [file.fileId]: {
+          status: "success",
+          mode,
+          message: getProcessingMessage(result, mode),
+        },
+      }));
+      setDrivePdfs((files) => files.filter((item) => item.fileId !== file.fileId || result.status !== "ready"));
+    } catch (error: unknown) {
+      setPdfRunStates((states) => ({
+        ...states,
+        [file.fileId]: {
+          status: "error",
+          mode,
+          message: error instanceof Error ? error.message : "ประมวลผล PDF ไม่สำเร็จ",
+        },
+      }));
     }
   }
 
@@ -162,6 +232,58 @@ export default function Home() {
           ) : null}
         </section>
       ) : null}
+
+      <section className="panel drive-pdfs-panel" aria-labelledby="drive-pdfs-heading">
+        <div className="panel-heading">
+          <div>
+            <p className="section-kicker">Drive PDF Actions</p>
+            <h2 id="drive-pdfs-heading">ประมวลผล PDF จาก Google Drive</h2>
+          </div>
+          <span className="source-pill">OCR เป็นค่าเริ่มต้น</span>
+        </div>
+        <div className="drive-panel-intro">
+          <p>
+            ปุ่ม OCR ใช้ Google Drive OCR เท่านั้น ส่วนปุ่ม Gemini เป็นการเรียกใช้แบบกดเองและอาจใช้โควต้า Gemini
+          </p>
+          <button
+            className="ghost-button"
+            onClick={() => {
+              setDriveLoading(true);
+              setDriveError("");
+              listDrivePdfs()
+                .then(setDrivePdfs)
+                .catch((error: unknown) => setDriveError(error instanceof Error ? error.message : "รีเฟรชรายการไม่สำเร็จ"))
+                .finally(() => setDriveLoading(false));
+            }}
+            type="button"
+          >
+            รีเฟรชรายการ PDF
+          </button>
+        </div>
+
+        {driveLoading ? <p className="drive-empty">กำลังโหลดรายการ PDF จาก Drive...</p> : null}
+        {!driveLoading && driveError ? <p className="drive-error" role="alert">{driveError}</p> : null}
+        {!driveLoading && !driveError && drivePdfs.length === 0 ? (
+          <p className="drive-empty">ยังไม่พบ PDF ใน Input หรือ Review Folder กรุณาอัปโหลดเข้า Google Drive ก่อน</p>
+        ) : null}
+        {!driveLoading && !driveError && drivePdfs.length > 0 ? (
+          <div className="drive-pdf-list">
+            {drivePdfs.map((file) => (
+              <DrivePdfRow
+                file={file}
+                key={file.fileId}
+                onRun={handlePdfRun}
+                state={pdfRunStates[file.fileId] ?? { status: "idle" }}
+              />
+            ))}
+          </div>
+        ) : null}
+
+        <div className="drive-action-guide" aria-label="ตัวเลือกการประมวลผล PDF">
+          <button className="primary-button" disabled type="button">รัน PDF (OCR)</button>
+          <button className="gemini-button" disabled type="button">ใช้ Gemini</button>
+        </div>
+      </section>
 
       <section className="summary-strip" aria-label="ภาพรวมใบปะหน้าจัดส่ง">
         <SummaryTile label="ใบปะหน้าที่พบ" value={summary.total} tone="neutral" />
@@ -304,6 +426,68 @@ export default function Home() {
       </section>
     </main>
   );
+}
+
+function DrivePdfRow({
+  file,
+  state,
+  onRun,
+}: {
+  file: DrivePdf;
+  state: PdfRunState;
+  onRun: (file: DrivePdf, mode: PdfRunMode) => Promise<void>;
+}) {
+  const isRunning = state.status === "running";
+  const statusMessage = state.status === "running"
+    ? `กำลังประมวลผลด้วย ${state.mode === "gemini" ? "Gemini" : "OCR"}...`
+    : state.status === "idle"
+      ? "ยังไม่ได้ประมวลผล"
+      : state.message;
+
+  return (
+    <article className="drive-pdf-row">
+      <div className="drive-pdf-meta">
+        <a href={file.url} rel="noreferrer" target="_blank">{file.fileName}</a>
+        <span>{file.location === "review" ? "Review" : "Input"} · {formatDriveDate(file.modifiedAt)}</span>
+      </div>
+      <div className="drive-pdf-actions">
+        <button
+          aria-label={`รัน PDF (OCR) ${file.fileName}`}
+          className="primary-button"
+          disabled={isRunning}
+          onClick={() => onRun(file, "ocr")}
+          type="button"
+        >
+          รัน PDF (OCR)
+        </button>
+        <button
+          aria-label={`ใช้ Gemini ${file.fileName}`}
+          className="gemini-button"
+          disabled={isRunning}
+          onClick={() => onRun(file, "gemini")}
+          type="button"
+        >
+          ใช้ Gemini
+        </button>
+      </div>
+      <p aria-live="polite" className={`drive-pdf-status ${state.status === "error" ? "is-error" : ""}`} role="status">
+        {statusMessage}
+      </p>
+    </article>
+  );
+}
+
+function formatDriveDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "ไม่ทราบวันที่";
+  return new Intl.DateTimeFormat("th-TH", { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function getProcessingMessage(result: ProcessingResult, mode: PdfRunMode) {
+  if (result.status === "ready") {
+    return `${mode === "gemini" ? "Gemini" : "OCR"} เสร็จแล้ว และส่งข้อมูลเข้า Google Sheet`;
+  }
+  return result.reason || result.message || "ประมวลผลแล้ว แต่ต้องตรวจสอบข้อมูลใน Google Sheet";
 }
 
 function SummaryTile({

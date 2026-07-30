@@ -193,6 +193,114 @@ button {
   color: var(--muted);
 }
 
+.drive-pdfs-panel {
+  margin-bottom: 14px;
+}
+
+.drive-panel-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfaf6;
+}
+
+.drive-panel-intro p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.drive-empty,
+.drive-error {
+  margin: 0;
+  padding: 20px 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.drive-error {
+  color: var(--red);
+}
+
+.drive-pdf-list {
+  display: grid;
+}
+
+.drive-pdf-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drive-pdf-meta {
+  min-width: 0;
+}
+
+.drive-pdf-meta a {
+  color: var(--accent-strong);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.drive-pdf-meta span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.drive-pdf-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.gemini-button {
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid #e3b66a;
+  border-radius: 8px;
+  background: #fff7e8;
+  color: #8a4b05;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.gemini-button:hover {
+  transform: translateY(-1px);
+}
+
+.gemini-button:disabled,
+.drive-pdf-actions .primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+}
+
+.drive-pdf-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.drive-pdf-status.is-error {
+  color: var(--red);
+}
+
+.drive-action-guide {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  color: var(--muted);
+}
+
 .summary-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -725,6 +833,25 @@ tbody tr.selected {
 }
 
 @media (max-width: 760px) {
+  .topbar,
+  .drive-panel-intro,
+  .drive-pdf-row {
+    align-items: stretch;
+    grid-template-columns: 1fr;
+    flex-direction: column;
+  }
+
+  .topbar-actions,
+  .drive-pdf-actions,
+  .drive-action-guide {
+    flex-wrap: wrap;
+  }
+
+  .drive-pdf-actions .primary-button,
+  .drive-pdf-actions .gemini-button {
+    flex: 1 1 150px;
+  }
+
   .label-toolbar {
     grid-template-columns: 1fr;
   }
