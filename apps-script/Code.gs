@@ -252,24 +252,35 @@ function processDriveFile(fileId, requestId) {
 
   try {
     var ocrTextAvailable = false;
+    var ocrFailure = null;
     try {
       ocrTextAvailable = Boolean(String(getOcrText_() || "").trim());
     } catch (error) {
       if (isRetryableError_(error)) {
-        return buildRetryableProcessingResult_(file, error, 0, "drive-ocr", requestId);
+        ocrFailure = error;
+      } else {
+        throw error;
       }
-      throw error;
     }
 
-    var ocrLabels = ocrTextAvailable
-      ? buildOcrShippingLabels_(file.getName(), file.getUrl(), getOcrText_())
+    var readableOcrText = ocrTextAvailable ? String(getOcrText_() || "") : "";
+    var ocrLabels = readableOcrText
+      ? buildOcrShippingLabels_(file.getName(), file.getUrl(), readableOcrText)
       : [];
+    var fallbackResult = enrichOcrWithCloudReaders_(file, readableOcrText, ocrLabels);
+    readableOcrText = fallbackResult.text;
+    ocrLabels = fallbackResult.labels;
+
+    if (ocrFailure && !fallbackResult.used && !readableOcrText) {
+      return buildRetryableProcessingResult_(file, ocrFailure, 0, "drive-ocr", requestId);
+    }
+
     var reviewLabels = ocrLabels.length
       ? ocrLabels
       : prepareShippingLabelsForExport_(file.getName(), []);
     var shippingExport = writeShippingLabelCandidates_(reviewLabels, file.getUrl());
-    var order = ocrTextAvailable
-      ? buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_())
+    var order = readableOcrText
+      ? buildOcrOrder_(file.getName(), file.getUrl(), readableOcrText)
       : buildOcrOrder_(file.getName(), file.getUrl(), "");
 
     return finalizeOrderResult_(
@@ -355,7 +366,8 @@ function refreshWithGemini() {
 }
 
 function isUsableOcrShippingLabels_(labels) {
-  return (labels || []).some(function (label) {
+  var candidates = Array.isArray(labels) ? labels : [];
+  return candidates.length > 0 && candidates.every(function (label) {
     return (
       label &&
       label.status === "ready" &&
@@ -1044,6 +1056,198 @@ function isUsefulDriveOcrText_(text, fileName) {
     (/\b(?:TH|JTTH|LEX)[A-Z0-9-]{6,}\b/i.test(value) ||
       /order\s*(?:no\.?|id)|เลขที่คำสั่งซื้อ|หมายเลขคำสั่งซื้อ/i.test(value))
   );
+}
+
+function enrichOcrWithCloudReaders_(file, text, labels) {
+  var result = {
+    text: String(text || ""),
+    labels: Array.isArray(labels) ? labels : [],
+    used: false,
+  };
+  if (isUsableOcrShippingLabels_(result.labels)) return result;
+
+  var readers = [
+    { name: "barcode-reader", read: extractBarcodesWithVision_ },
+    { name: "google-vision", read: extractTextWithVision_ },
+    { name: "document-ai", read: extractTextWithDocumentAi_ },
+  ];
+
+  for (var index = 0; index < readers.length; index++) {
+    try {
+      var enrichment = readers[index].read(file);
+      var extraText = enrichment && enrichment.text ? String(enrichment.text) : "";
+      var barcodes = enrichment && Array.isArray(enrichment.barcodes)
+        ? enrichment.barcodes.join("\n")
+        : "";
+      var combinedText = [result.text, extraText, barcodes].filter(Boolean).join("\n");
+      if (combinedText === result.text) continue;
+
+      result.text = combinedText;
+      result.labels = buildOcrShippingLabels_(file.getName(), file.getUrl(), result.text);
+      result.used = true;
+      if (isUsableOcrShippingLabels_(result.labels)) break;
+    } catch (error) {
+      console.warn(
+        "OCR fallback unavailable: " + readers[index].name,
+        error && error.message ? error.message : error,
+      );
+    }
+  }
+  return result;
+}
+
+function getCloudReaderConfig_() {
+  return {
+    projectId: getOptionalScriptProperty_("GOOGLE_CLOUD_PROJECT_ID"),
+    location: getOptionalScriptProperty_("GOOGLE_CLOUD_LOCATION") || "us",
+    documentAiProcessor: getOptionalScriptProperty_("DOCUMENT_AI_PROCESSOR_NAME"),
+  };
+}
+
+function getOptionalScriptProperty_(key) {
+  try {
+    if (typeof PropertiesService === "undefined") return "";
+    var value = PropertiesService.getScriptProperties().getProperty(key);
+    return value ? String(value).trim() : "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function fetchGoogleCloudOcr_(url, payload) {
+  if (typeof ScriptApp === "undefined" || typeof UrlFetchApp === "undefined") {
+    return null;
+  }
+
+  var accessToken = ScriptApp.getOAuthToken();
+  var response = UrlFetchApp.fetch(url, {
+    method: "post",
+    contentType: "application/json",
+    headers: { Authorization: "Bearer " + accessToken },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true,
+  });
+  var status = response.getResponseCode();
+  if (status < 200 || status >= 300) {
+    throw createProcessingError_(
+      "CloudOcrError",
+      "Google Cloud OCR ตอบกลับ HTTP " + status,
+      true,
+    );
+  }
+
+  return JSON.parse(response.getContentText() || "{}");
+}
+
+function extractBarcodesWithVision_(file) {
+  var config = getCloudReaderConfig_();
+  if (!config.projectId) return { text: "", barcodes: [] };
+
+  var response = fetchGoogleCloudOcr_(
+    "https://vision.googleapis.com/v1/projects/" +
+      encodeURIComponent(config.projectId) +
+      "/locations/" +
+      encodeURIComponent(config.location) +
+      "/files:annotate",
+    {
+      requests: [{
+        inputConfig: {
+          content: Utilities.base64Encode(file.getBlob().getBytes()),
+          mimeType: "application/pdf",
+        },
+        features: [{ type: "BARCODE_DETECTION", maxResults: 50 }],
+        pages: [1, 2, 3, 4, 5],
+      }],
+    },
+  );
+  return {
+    text: "",
+    barcodes: collectVisionBarcodeValues_(response),
+  };
+}
+
+function extractTextWithVision_(file) {
+  var config = getCloudReaderConfig_();
+  if (!config.projectId) return { text: "", barcodes: [] };
+
+  var response = fetchGoogleCloudOcr_(
+    "https://vision.googleapis.com/v1/projects/" +
+      encodeURIComponent(config.projectId) +
+      "/locations/" +
+      encodeURIComponent(config.location) +
+      "/files:annotate",
+    {
+      requests: [{
+        inputConfig: {
+          content: Utilities.base64Encode(file.getBlob().getBytes()),
+          mimeType: "application/pdf",
+        },
+        features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+        pages: [1, 2, 3, 4, 5],
+      }],
+    },
+  );
+  return {
+    text: collectVisionText_(response),
+    barcodes: [],
+  };
+}
+
+function collectVisionText_(response) {
+  var texts = [];
+  (response && response.responses || []).forEach(function (fileResponse) {
+    (fileResponse.responses || []).forEach(function (pageResponse) {
+      if (pageResponse.fullTextAnnotation && pageResponse.fullTextAnnotation.text) {
+        texts.push(pageResponse.fullTextAnnotation.text);
+      } else if (pageResponse.textAnnotations && pageResponse.textAnnotations[0]) {
+        texts.push(pageResponse.textAnnotations[0].description || "");
+      }
+    });
+  });
+  return texts.filter(Boolean).join("\n");
+}
+
+function collectVisionBarcodeValues_(response) {
+  var values = [];
+  (response && response.responses || []).forEach(function (fileResponse) {
+    (fileResponse.responses || []).forEach(function (pageResponse) {
+      ["barcodeAnnotations", "localizedBarcodeAnnotations"].forEach(function (key) {
+        (pageResponse[key] || []).forEach(function (barcode) {
+          var value = barcode.value || barcode.rawValue || barcode.description || "";
+          if (value) values.push(String(value).trim());
+        });
+      });
+    });
+  });
+  return uniqueValues_(values);
+}
+
+function extractTextWithDocumentAi_(file) {
+  var config = getCloudReaderConfig_();
+  if (!config.documentAiProcessor) return { text: "", barcodes: [] };
+
+  var response = fetchGoogleCloudOcr_(
+    "https://documentai.googleapis.com/v1/" + config.documentAiProcessor + ":process",
+    {
+      rawDocument: {
+        content: Utilities.base64Encode(file.getBlob().getBytes()),
+        mimeType: "application/pdf",
+      },
+    },
+  );
+  var document = response && response.document ? response.document : {};
+  var barcodes = [];
+  (document.pages || []).forEach(function (page) {
+    (page.detectedBarcodes || []).forEach(function (detected) {
+      var barcode = detected && detected.barcode ? detected.barcode : {};
+      var value = barcode.rawValue || "";
+      if (value) barcodes.push(String(value).trim());
+    });
+  });
+  return {
+    text: document.text || "",
+    barcodes: uniqueValues_(barcodes),
+  };
 }
 
 function normalizeOcrText_(text) {

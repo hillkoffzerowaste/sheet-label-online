@@ -269,6 +269,83 @@ test("accepts OCR text without marketplace branding when the PDF filename identi
   );
 });
 
+test("uses the barcode reader before Vision OCR and Document AI", async () => {
+  const context = await loadHelpers();
+  let visionCalls = 0;
+  let documentAiCalls = 0;
+  const file = {
+    getName: () => "2 lazada.pdf",
+    getUrl: () => "https://drive/lazada",
+  };
+  const text = [
+    "Lazada",
+    "Order No.: 1117718175852180",
+    "Customer NAME: Arun Demo",
+    "ADDRESS: 73/1 Moo 13, Ban Pong, Ratchaburi 70110",
+  ].join("\n");
+  const labels = context.buildOcrShippingLabels_(file.getName(), file.getUrl(), text);
+
+  context.extractBarcodesWithVision_ = () => ({ barcodes: ["LEXUP0702650797"] });
+  context.extractTextWithVision_ = () => {
+    visionCalls += 1;
+    return { text: "should not be called", barcodes: [] };
+  };
+  context.extractTextWithDocumentAi_ = () => {
+    documentAiCalls += 1;
+    return { text: "should not be called", barcodes: [] };
+  };
+
+  const result = context.enrichOcrWithCloudReaders_(file, text, labels);
+
+  assert.equal(result.used, true);
+  assert.equal(result.labels[0].trackingNumber, "LEXUP0702650797");
+  assert.equal(result.labels[0].status, "ready");
+  assert.equal(visionCalls, 0);
+  assert.equal(documentAiCalls, 0);
+});
+
+test("reads Document AI text and detected barcode values", async () => {
+  const context = await loadHelpers();
+  let requestUrl = "";
+  let requestPayload = "";
+  context.PropertiesService = {
+    getScriptProperties: () => ({
+      getProperty: (key) => key === "DOCUMENT_AI_PROCESSOR_NAME"
+        ? "projects/demo/locations/asia-southeast1/processors/processor"
+        : "",
+    }),
+  };
+  context.ScriptApp = { getOAuthToken: () => "oauth-token" };
+  context.Utilities = { base64Encode: () => "encoded-pdf" };
+  context.UrlFetchApp = {
+    fetch: (url, options) => {
+      requestUrl = url;
+      requestPayload = options.payload;
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({
+          document: {
+            text: "Lazada\nOrder No.: 1117718175852180",
+            pages: [{ detectedBarcodes: [{ barcode: { rawValue: "LEXUP0702650797" } }] }],
+          },
+        }),
+      };
+    },
+  };
+
+  const result = context.extractTextWithDocumentAi_({
+    getBlob: () => ({ getBytes: () => [1, 2, 3] }),
+  });
+
+  assert.match(requestUrl, /documentai\.googleapis\.com\/v1\/projects\/demo/);
+  assert.deepEqual(JSON.parse(requestPayload).rawDocument, {
+    content: "encoded-pdf",
+    mimeType: "application/pdf",
+  });
+  assert.match(result.text, /Order No\./);
+  assert.deepEqual(Array.from(result.barcodes), ["LEXUP0702650797"]);
+});
+
 test("parses four Shopee SPX labels from a two-column PDF OCR reading", async () => {
   const context = await loadHelpers();
   const labels = context.parseOcrShippingLabels_(
