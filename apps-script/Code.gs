@@ -1211,7 +1211,7 @@ function writeShippingLabels_(labels, fileUrl) {
         ? sheet.getRange(2, 1, lastRow - 1, SHIPPING_LABEL_HEADERS.length).getValues()
         : [];
     const existingRows = getExistingShippingLabelRows_(spreadsheet);
-    const newLabels = filterNewShippingLabels_(labels, existingRows);
+    const newLabels = filterNewShippingLabels_(labels, existingRows, fileUrl);
     const readyFileNames = {};
     (labels || []).forEach(function (label) {
       if (label && label.status !== "review" && label.sourceFileName) {
@@ -1278,17 +1278,33 @@ function removeStaleReviewPlaceholders_(sheet, existingRows, readyFileNames) {
   });
 }
 
-function filterNewShippingLabels_(labels, existingRows) {
+function filterNewShippingLabels_(labels, existingRows, fileUrl) {
   const existingKeys = {};
+  const importedIdentifiers = {};
   (existingRows || []).forEach(function (row) {
+    const rowSource = fileUrl ? stringValue_(row[9]) : stringValue_(row[1]);
     existingKeys[
-      shippingLabelRowKey_(row[1], row[5], row[6], row[3], row[4])
-    ] = true;
+      shippingLabelRowKey_(rowSource, row[5], row[6], row[3], row[4])
+    ] = stringValue_(row[7]) === "ready";
+    if (fileUrl && rowSource === fileUrl && stringValue_(row[7]) === "ready") {
+      if (stringValue_(row[5])) importedIdentifiers["order:" + stringValue_(row[5])] = true;
+      if (stringValue_(row[6])) importedIdentifiers["tracking:" + stringValue_(row[6])] = true;
+    }
   });
 
   return (labels || []).filter(function (label) {
+    if (fileUrl && label) {
+      if (
+        (label.orderId && importedIdentifiers["order:" + stringValue_(label.orderId)]) ||
+        (label.trackingNumber && importedIdentifiers["tracking:" + stringValue_(label.trackingNumber)])
+      ) {
+        return false;
+      }
+    }
+
+    const sourceKey = fileUrl ? fileUrl : label.sourceFileName;
     const key = shippingLabelRowKey_(
-      label.sourceFileName,
+      sourceKey,
       label.orderId,
       label.trackingNumber,
       label.recipientName,

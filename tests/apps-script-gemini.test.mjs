@@ -776,6 +776,41 @@ test("filters shipping label rows already exported for the same file", async () 
   assert.equal(newLabels[0].marketplace, "Lazada");
 });
 
+test("skips an already imported label when OCR text changes but file and identifiers match", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("fixture.pdf", [
+    {
+      marketplace: "shopee",
+      recipientName: "Mali Corrected",
+      shippingAddress: "Bangkok 10110 corrected",
+      orderId: "260728AAA111",
+      trackingNumber: "TH100000000001A",
+    },
+  ]);
+  const existingRows = [
+    [
+      new Date(),
+      "fixture.pdf",
+      "Shopee",
+      "Mali OCR Variant",
+      "Bangkok 10110",
+      "260728AAA111",
+      "TH100000000001A",
+      "ready",
+      "",
+      "https://drive.google.com/file/d/fixture/view",
+    ],
+  ];
+
+  const newLabels = context.filterNewShippingLabels_(
+    labels,
+    existingRows,
+    "https://drive.google.com/file/d/fixture/view",
+  );
+
+  assert.equal(newLabels.length, 0);
+});
+
 test("removes stale empty review placeholders when a file later reads successfully", async () => {
   const context = await loadHelpers();
   const deletedRows = [];
