@@ -4,15 +4,15 @@
 
 **Goal:** ให้ Apps Script ใช้ Google Drive OCR อัตโนมัติเมื่อ Gemini โควตาเต็ม โดยไม่ทำไฟล์หายหรือเขียนแถวซ้ำ
 
-**Architecture:** Gemini เป็นตัวหลัก. เมื่อพบ HTTP 429 หรือ response ที่ระบุ quota/rate-limit/resource exhausted ให้แปลง PDF เป็น Google Docs ชั่วคราวด้วย Advanced Drive Service, อ่านข้อความด้วย DocumentApp, parse ด้วยกติกาเดิม, และ reuse OCR text ครั้งเดียวต่อ PDF. ผล fallback มี `source: "drive-ocr"` และข้อมูลไม่ครบเป็น `review`.
+**Architecture:** Gemini เป็นตัวหลัก. เมื่อพบ HTTP 429 หรือ response ที่ระบุ quota/rate-limit/resource exhausted ให้แปลง PDF เป็น Google Docs ชั่วคราวด้วย `Drive.Files.insert`, อ่านข้อความด้วย DocumentApp, parse ด้วยกติกาเดิม, และ reuse OCR text ครั้งเดียวต่อ PDF. ผล fallback มี `source: "drive-ocr"` และข้อมูลไม่ครบเป็น `review`.
 
-**Tech Stack:** Google Apps Script, Advanced Drive Service (`Drive.Files.copy`), `DocumentApp`, Node `node:test`, existing `apps-script/Code.gs`.
+**Tech Stack:** Google Apps Script, Advanced Drive Service (`Drive.Files.insert`), `DocumentApp`, Node `node:test`, existing `apps-script/Code.gs`.
 
 ## Global Constraints
 
 - OCR fallback ทำงานเฉพาะ quota/rate-limit error; schema error, bad PDF, และ API-key error ไม่ใช่ quota
 - ห้าม retry Gemini ซ้ำใน execution เดียวหลัง HTTP 429
-- ใช้ `ocr: true`, `ocrLanguage: "th"`; ลบ Google Docs ชั่วคราวใน `finally`
+- ใช้ `Drive.Files.insert` พร้อม `ocr: true`, `ocrLanguage: "th"`; ลบ Google Docs ชั่วคราวใน `finally`
 - ผล OCR ใช้ `source: "drive-ocr"`; ข้อมูลที่ขาดต้องเป็น `review` และห้ามเดา
 - ถ้า OCR/Drive/Sheet ล้มเหลวแบบ retryable ให้คง PDF ไว้ใน input folder
 - รักษา duplicate protection, date sheets, และ Marketplace ทั้ง Shopee/Lazada/TikTok
@@ -56,7 +56,7 @@
 
 **Interfaces:**
 
-- `extractTextWithDriveOcr_(file)` creates a temporary Google Doc with `Drive.Files.copy`, reads `DocumentApp` text, and trashes the temp file in `finally`.
+- `extractTextWithDriveOcr_(file)` creates a temporary Google Doc with `Drive.Files.insert`, reads `DocumentApp` text, and trashes the temp file in `finally`.
 - `processDriveFile(fileId)` owns an execution-local OCR text cache shared by shipping-label and order fallback.
 
 - [ ] **Step 1: Add a failing flow test.** Stub both Gemini extractors to throw a quota error, stub `extractTextWithDriveOcr_` to count calls, stub writes/movement as in existing tests, and assert `processDriveFile` calls OCR once and returns `source: "drive-ocr"`.

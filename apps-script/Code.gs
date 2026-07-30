@@ -198,41 +198,64 @@ function setupPdfProcessingTrigger() {
 function processDriveFile(fileId) {
   const file = DriveApp.getFileById(fileId);
 
+  var ocrText = null;
+  var ocrFetched = false;
+  var getOcrText_ = function () {
+    if (!ocrFetched) {
+      ocrText = extractTextWithDriveOcr_(file);
+      ocrFetched = true;
+    }
+    return ocrText;
+  };
+
   try {
     let shippingExport;
     try {
       shippingExport = exportShippingLabels_(file);
     } catch (error) {
-      if (isRetryableError_(error)) throw error;
-
-      const reviewLabels = prepareShippingLabelsForExport_(file.getName(), []);
-      const reviewResult = writeShippingLabels_(reviewLabels, file.getUrl());
-      shippingExport = {
-        inserted:
-          reviewResult && Number.isFinite(reviewResult.inserted)
-            ? reviewResult.inserted
-            : reviewLabels.length,
-        total: reviewLabels.length,
-      };
+      if (isGeminiQuotaProcessingError_(error)) {
+        const ocrLabels = buildOcrShippingLabels_(
+          file.getName(),
+          file.getUrl(),
+          getOcrText_(),
+        );
+        const ocrResult = writeShippingLabels_(ocrLabels, file.getUrl());
+        shippingExport = {
+          inserted:
+            ocrResult && Number.isFinite(ocrResult.inserted)
+              ? ocrResult.inserted
+              : ocrLabels.length,
+          total: ocrLabels.length,
+        };
+      } else if (isRetryableError_(error)) {
+        throw error;
+      } else {
+        const reviewLabels = prepareShippingLabelsForExport_(file.getName(), []);
+        const reviewResult = writeShippingLabels_(reviewLabels, file.getUrl());
+        shippingExport = {
+          inserted:
+            reviewResult && Number.isFinite(reviewResult.inserted)
+              ? reviewResult.inserted
+              : reviewLabels.length,
+          total: reviewLabels.length,
+        };
+      }
     }
 
     try {
-      const order = extractOrderWithGemini_(file);
-      order.fileName = file.getName();
-      order.fileUrl = file.getUrl();
+      let order;
+      if (ocrFetched) {
+        order = buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_());
+      } else {
+        try {
+          order = extractOrderWithGemini_(file);
+        } catch (error) {
+          if (!isGeminiQuotaProcessingError_(error)) throw error;
+          order = buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_());
+        }
+      }
 
-      const classification = classifyGeminiOrder_(
-        order,
-        Boolean(order.orderId && isDuplicateOrder(order.orderId)),
-      );
-      order.status = classification.status;
-      order.reason = classification.reason;
-      order.missingFields = classification.missingFields;
-      order.shippingLabelsExported = shippingExport.inserted;
-
-      writeOrderResult_(order);
-      moveToProcessed(file);
-      return order;
+      return finalizeOrderResult_(order, file, shippingExport.inserted);
     } catch (error) {
       if (isRetryableError_(error)) {
         return buildRetryableProcessingResult_(file, error, shippingExport.inserted);
@@ -254,6 +277,24 @@ function processDriveFile(fileId) {
     moveToProcessed(file);
     return order;
   }
+}
+
+function finalizeOrderResult_(order, file, shippingLabelsExported) {
+  order.fileName = file.getName();
+  order.fileUrl = file.getUrl();
+
+  const classification = classifyGeminiOrder_(
+    order,
+    Boolean(order.orderId && isDuplicateOrder(order.orderId)),
+  );
+  order.status = classification.status;
+  order.reason = classification.reason;
+  order.missingFields = classification.missingFields;
+  order.shippingLabelsExported = shippingLabelsExported;
+
+  writeOrderResult_(order);
+  moveToProcessed(file);
+  return order;
 }
 
 function exportShippingLabels_(file) {
@@ -386,6 +427,14 @@ function extractOrderWithGemini_(file) {
 
   const status = response.getResponseCode();
   if (status < 200 || status >= 300) {
+    const bodyText = response.getContentText();
+    if (isGeminiQuotaError_(status, bodyText)) {
+      throw createProcessingError_(
+        "GeminiQuotaError",
+        "Gemini quota exhausted: HTTP " + status,
+        true,
+      );
+    }
     throw createProcessingError_(
       "GeminiTransportError",
       "Gemini ตอบกลับด้วย HTTP " + status,
@@ -477,6 +526,14 @@ function extractShippingLabelsWithGemini_(file) {
 
   const status = response.getResponseCode();
   if (status < 200 || status >= 300) {
+    const bodyText = response.getContentText();
+    if (isGeminiQuotaError_(status, bodyText)) {
+      throw createProcessingError_(
+        "GeminiQuotaError",
+        "Gemini quota exhausted: HTTP " + status,
+        true,
+      );
+    }
     throw createProcessingError_("GeminiTransportError", "Gemini ตอบกลับด้วย HTTP " + status, true);
   }
 
@@ -674,17 +731,36 @@ function isRetryableError_(error) {
   return Boolean(error && error.retryable);
 }
 
-function extractPdfText_(file) {
-  // Enable Advanced Google services > Drive API before using OCR conversion.
-  const resource = {
-    title: "OCR-" + file.getName(),
-    mimeType: MimeType.GOOGLE_DOCS,
-  };
-  const converted = Drive.Files.copy(resource, file.getId(), { ocr: true });
-  const doc = DocumentApp.openById(converted.id);
-  const text = doc.getBody().getText();
-  DriveApp.getFileById(converted.id).setTrashed(true);
-  return text;
+function isGeminiQuotaProcessingError_(error) {
+  return Boolean(
+    error &&
+      (error.name === "GeminiQuotaError" ||
+        isGeminiQuotaError_(error.status, error.message)),
+  );
+}
+
+function extractTextWithDriveOcr_(file) {
+  var converted;
+  try {
+    converted = Drive.Files.insert(
+      { title: "OCR-" + file.getName(), mimeType: MimeType.GOOGLE_DOCS },
+      file.getBlob(),
+      { ocr: true, ocrLanguage: "th" },
+    );
+    return DocumentApp.openById(converted.id).getBody().getText();
+  } catch (error) {
+    throw createProcessingError_(
+      "DriveOcrError",
+      "Drive OCR ไม่สามารถแปลง PDF ได้: " + (error && error.message ? error.message : ""),
+      true,
+    );
+  } finally {
+    if (converted && converted.id) {
+      try {
+        DriveApp.getFileById(converted.id).setTrashed(true);
+      } catch (_) {}
+    }
+  }
 }
 
 function detectMarketplace(text) {
@@ -1085,6 +1161,137 @@ function formatItems_(items) {
       return item.name + " x" + item.quantity;
     })
     .join(", ");
+}
+
+function isGeminiQuotaError_(status, bodyText) {
+  if (Number(status) === 429) return true;
+
+  const message = String(bodyText || "").toLowerCase();
+  return (
+    message.indexOf("quota") >= 0 ||
+    message.indexOf("resource_exhausted") >= 0 ||
+    message.indexOf("resource exhausted") >= 0 ||
+    message.indexOf("rate limit") >= 0 ||
+    message.indexOf("too many requests") >= 0
+  );
+}
+
+function buildOcrOrder_(fileName, fileUrl, text) {
+  const marketplace = detectMarketplace(text);
+  const order = parseOcrOrder_(marketplace, text);
+  const validation = validateOrder(order);
+
+  order.fileName = fileName;
+  order.fileUrl = fileUrl;
+  order.source = "drive-ocr";
+  order.confidence = 40;
+  order.missingFields = validation.missingFields;
+  order.status = validation.complete ? "ready" : "incomplete";
+  order.reason = validation.complete
+    ? ""
+    : "Drive OCR อ่านข้อมูลไม่ครบ: " + validation.missingFields.join(", ");
+  return order;
+}
+
+function buildOcrShippingLabels_(fileName, fileUrl, text) {
+  const labels = parseOcrShippingLabels_(fileName, text);
+  labels.forEach(function (label) {
+    label.fileUrl = fileUrl;
+    label.source = "drive-ocr";
+  });
+  return labels;
+}
+
+function readOcrField_(text, aliases) {
+  var lines = String(text || "").split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    for (var j = 0; j < aliases.length; j++) {
+      var escaped = aliases[j].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      var match = new RegExp("^" + escaped + "\\s*:\\s*(.*)", "i").exec(line);
+      if (match && match[1].trim()) return match[1].trim();
+    }
+  }
+  return "";
+}
+
+function parseOcrOrder_(marketplace, text) {
+  var normalizedMarketplace = normalizeMarketplace_(marketplace);
+  var customerName = readOcrField_(text, ["Recipient", "Receiver", "To", "Customer"]);
+  var orderId = readOcrField_(text, [
+    "Shopee Order No.",
+    "LAZADA Order Number",
+    "Order No.",
+    "Order ID",
+  ]);
+  var address = readOcrField_(text, ["Address"]);
+
+  var order = {
+    marketplace: normalizedMarketplace,
+    orderId: orderId,
+    customerName: customerName,
+    items: [],
+    quantity: 0,
+    total: NaN,
+    address: address,
+    source: "drive-ocr",
+    confidence: 40,
+    rawNotes: "",
+  };
+
+  var validation = validateOrder(order);
+  order.missingFields = validation.missingFields;
+  order.status = validation.complete ? "ready" : "incomplete";
+  order.reason = validation.complete
+    ? ""
+    : "Drive OCR อ่านข้อมูลไม่ครบ: " + validation.missingFields.join(", ");
+
+  return order;
+}
+
+function parseOcrShippingLabels_(fileName, text) {
+  var marketplace = detectMarketplace(text);
+  var recipientName = readOcrField_(text, ["Recipient", "Receiver", "To", "Customer"]);
+  var orderId = readOcrField_(text, [
+    "Shopee Order No.",
+    "LAZADA Order Number",
+    "Order No.",
+    "Order ID",
+  ]);
+  var trackingNumber = readOcrField_(text, ["Tracking"]);
+  var shippingAddress = readOcrField_(text, ["Address"]);
+
+  if (!recipientName && !orderId && !trackingNumber && !shippingAddress) {
+    return [
+      {
+        id: fileName + "-ocr-unknown",
+        sourceFileName: fileName,
+        marketplace: "Unknown",
+        recipientName: "",
+        shippingAddress: "",
+        orderId: "",
+        trackingNumber: "",
+        status: "review",
+        reviewReasons: [
+          "marketplace",
+          "recipientName",
+          "shippingAddress",
+          "orderId",
+          "trackingNumber",
+        ],
+      },
+    ];
+  }
+
+  return normalizeShippingLabels_(fileName, [
+    {
+      marketplace: marketplace,
+      recipientName: recipientName,
+      shippingAddress: shippingAddress,
+      orderId: orderId,
+      trackingNumber: trackingNumber,
+    },
+  ]);
 }
 
 function jsonResponse_(data) {

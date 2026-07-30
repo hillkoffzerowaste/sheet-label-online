@@ -12,7 +12,7 @@ Apps Script จะยังใช้ Gemini เป็นตัวหลัก �
 
 1. อ่าน PDF จากโฟลเดอร์ input
 2. เรียก Gemini ตามปกติ
-3. เมื่อพบ quota error ให้สร้าง Google Docs ชั่วคราวจาก PDF ด้วย Advanced Drive Service (`Drive.Files.copy` พร้อม `ocr: true` และ `ocrLanguage: "th"`)
+3. เมื่อพบ quota error ให้สร้าง Google Docs ชั่วคราวจาก PDF ด้วย Advanced Drive Service (`Drive.Files.insert` พร้อม `ocr: true` และ `ocrLanguage: "th"`)
 4. อ่านข้อความด้วย `DocumentApp`
 5. ตรวจ Marketplace และใช้ parser แบบกำหนดกติกาเดิมเพื่อสร้าง Order/Shipping Label
 6. กำหนด `source` เป็น `drive-ocr` และกำหนด `confidence` ต่ำกว่าผล Gemini เพื่อให้ข้อมูลที่ไม่แน่ใจไปสถานะ `review`

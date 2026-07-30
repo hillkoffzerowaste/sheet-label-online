@@ -59,6 +59,162 @@ test("defaults Gemini PDF extraction to the current Flash-Lite model", async () 
   assert.equal(context.getGeminiConfig_().model, "gemini-3.1-flash-lite");
 });
 
+test("recognizes Gemini quota responses without treating other errors as quota", async () => {
+  const context = await loadHelpers();
+
+  assert.equal(context.isGeminiQuotaError_(429, "RESOURCE_EXHAUSTED"), true);
+  assert.equal(context.isGeminiQuotaError_(200, "quota exceeded"), true);
+  assert.equal(context.isGeminiQuotaError_(400, "invalid argument"), false);
+});
+
+test("marks an OCR order with drive-ocr source and review when fields are missing", async () => {
+  const context = await loadHelpers();
+  const order = context.buildOcrOrder_(
+    "fallback.pdf",
+    "https://drive/file",
+    "Shopee\nCustomer: Mali",
+  );
+
+  assert.equal(order.source, "drive-ocr");
+  assert.equal(order.status, "incomplete");
+  assert.ok(order.missingFields.includes("orderId"));
+});
+
+test("returns an OCR shipping-label candidate instead of guessing missing values", async () => {
+  const context = await loadHelpers();
+  const labels = context.buildOcrShippingLabels_(
+    "fallback.pdf",
+    "https://drive/file",
+    "Shopee",
+  );
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].source, "drive-ocr");
+  assert.equal(labels[0].status, "review");
+});
+
+test("parses OCR order fields for Shopee, Lazada, and TikTok Shop", async () => {
+  const context = await loadHelpers();
+  const fixtures = [
+    [
+      "Shopee",
+      "Shopee\nRecipient: Mali Demo\nOrder No.: SP-1001\nTracking: TH1001\nAddress: Bangkok 10110",
+    ],
+    [
+      "Lazada",
+      "Lazada\nReceiver: Arun Demo\nLAZADA Order Number: LZD-1001\nTracking: LEXTH1001\nAddress: Chiang Mai 50000",
+    ],
+    [
+      "TikTok Shop",
+      "TikTok Shop\nTo: Ploy Demo\nOrder ID: TTS-1001\nTracking: JTTH1001\nAddress: Phuket 83000",
+    ],
+  ];
+
+  fixtures.forEach(([marketplace, text]) => {
+    const order = context.parseOcrOrder_(marketplace, text);
+    assert.equal(order.marketplace, marketplace);
+    assert.ok(order.orderId);
+    assert.ok(order.customerName);
+    assert.ok(order.address);
+  });
+});
+
+test("parses OCR shipping-label fields into a review-safe label", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "lazada.pdf",
+    "Lazada\nReceiver: Arun Demo\nLAZADA Order Number: LZD-1001\nTracking: LEXTH1001\nAddress: Chiang Mai 50000",
+  );
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].marketplace, "Lazada");
+  assert.equal(labels[0].recipientName, "Arun Demo");
+  assert.equal(labels[0].orderId, "LZD-1001");
+  assert.equal(labels[0].trackingNumber, "LEXTH1001");
+  assert.equal(labels[0].shippingAddress, "Chiang Mai 50000");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("uses Drive OCR once when Gemini quota is exhausted", async () => {
+  const context = await loadHelpers();
+  let ocrCalls = 0;
+  let movedToProcessed = false;
+  const file = {
+    getId: () => "fixture-id",
+    getName: () => "fallback.pdf",
+    getUrl: () => "https://drive/file",
+  };
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractShippingLabelsWithGemini_ = () => {
+    throw context.createProcessingError_("GeminiQuotaError", "quota exceeded", true);
+  };
+  context.extractOrderWithGemini_ = () => {
+    throw context.createProcessingError_("GeminiQuotaError", "quota exceeded", true);
+  };
+  context.extractTextWithDriveOcr_ = () => {
+    ocrCalls += 1;
+    return "Shopee\nRecipient: Mali Demo\nOrder No.: SP-1001\nTracking: TH1001\nAddress: Bangkok 10110";
+  };
+  context.writeShippingLabels_ = () => ({ inserted: 1 });
+  context.writeOrderResult_ = () => {};
+  context.isDuplicateOrder = () => false;
+  context.moveToProcessed = () => {
+    movedToProcessed = true;
+  };
+
+  const result = context.processDriveFile("fixture-id");
+
+  assert.equal(ocrCalls, 1);
+  assert.equal(result.source, "drive-ocr");
+  assert.equal(movedToProcessed, true);
+});
+
+test("trashes the temporary OCR document even when OCR text reading fails", async () => {
+  const context = await loadHelpers();
+  let copyOptions;
+  let trashed = 0;
+
+  context.MimeType = { GOOGLE_DOCS: "application/vnd.google-apps.document" };
+  context.Drive = {
+    Files: {
+      insert: (resource, blob, options) => {
+        copyOptions = { resource, blob, options };
+        return { id: "ocr-doc-id" };
+      },
+    },
+  };
+  context.DocumentApp = {
+    openById: () => {
+      throw new Error("OCR read failed");
+    },
+  };
+  context.DriveApp = {
+    getFileById: () => ({
+      setTrashed: () => {
+        trashed += 1;
+      },
+    }),
+  };
+
+  let caught;
+  try {
+    context.extractTextWithDriveOcr_({
+      getName: () => "fallback.pdf",
+      getId: () => "pdf-id",
+      getBlob: () => "pdf-blob",
+    });
+  } catch (error) {
+    caught = error;
+  }
+
+  assert.equal(caught.name, "DriveOcrError");
+  assert.equal(caught.retryable, true);
+  assert.equal(trashed, 1);
+  assert.equal(copyOptions.options.ocr, true);
+  assert.equal(copyOptions.options.ocrLanguage, "th");
+});
+
 test("hides only older dated shipping-label sheets", async () => {
   const context = await loadHelpers();
   const hidden = [];
