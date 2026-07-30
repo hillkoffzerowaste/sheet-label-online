@@ -67,6 +67,32 @@ test("recognizes Gemini quota responses without treating other errors as quota",
   assert.equal(context.isGeminiQuotaError_(400, "invalid argument"), false);
 });
 
+test("preserves the Google Cloud error reason when OCR returns a non-2xx response", async () => {
+  const context = await loadHelpers();
+  context.ScriptApp = { getOAuthToken: () => "oauth-token" };
+  context.UrlFetchApp = {
+    fetch: () => ({
+      getResponseCode: () => 403,
+      getContentText: () => JSON.stringify({
+        error: {
+          status: "PERMISSION_DENIED",
+          message: "Cloud Vision API is not enabled in project 123",
+        },
+      }),
+    }),
+  };
+
+  assert.throws(
+    () => context.fetchGoogleCloudOcr_("https://vision.googleapis.com/test", {}),
+    (error) => {
+      assert.equal(error.name, "CloudOcrError");
+      assert.match(error.message, /HTTP 403/);
+      assert.match(error.message, /Cloud Vision API is not enabled/);
+      return true;
+    },
+  );
+});
+
 test("routes doPost to OCR by default and Gemini only for explicit mode", async () => {
   const context = await loadHelpers();
   const calls = [];

@@ -1156,14 +1156,29 @@ function fetchGoogleCloudOcr_(url, payload) {
   });
   var status = response.getResponseCode();
   if (status < 200 || status >= 300) {
+    var errorReason = extractGoogleCloudErrorReason_(response.getContentText());
+    var errorMessage =
+      "Google Cloud OCR ตอบกลับ HTTP " + status +
+      (errorReason ? ": " + errorReason : "");
     throw createProcessingError_(
       "CloudOcrError",
-      "Google Cloud OCR ตอบกลับ HTTP " + status,
+      errorMessage,
       true,
     );
   }
 
   return JSON.parse(response.getContentText() || "{}");
+}
+
+function extractGoogleCloudErrorReason_(bodyText) {
+  try {
+    var body = JSON.parse(String(bodyText || ""));
+    var cloudError = body && body.error ? body.error : {};
+    var message = cloudError.message || cloudError.status || "";
+    return String(message).replace(/[\r\n]+/g, " ").trim().slice(0, 240);
+  } catch (_) {
+    return "";
+  }
 }
 
 function extractBarcodesWithVision_(file) {
