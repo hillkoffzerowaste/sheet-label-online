@@ -172,11 +172,25 @@ function processInputFolder() {
 }
 
 function onSpreadsheetOpen() {
-  SpreadsheetApp.getUi()
+  var ui;
+  try {
+    ui = SpreadsheetApp.getUi();
+  } catch (error) {
+    console.warn(
+      "Spreadsheet UI is unavailable; skipping PDF menu setup",
+      error && error.message ? error.message : error,
+    );
+    return false;
+  }
+
+  if (!ui || typeof ui.createMenu !== "function") return false;
+
+  ui
     .createMenu("PDF")
     .addItem("รีเฟรช PDF ตอนนี้ (OCR)", "refreshNow")
     .addItem("เรียก Gemini กับ PDF ใน Review", "refreshWithGemini")
     .addToUi();
+  return true;
 }
 
 function refreshNow() {

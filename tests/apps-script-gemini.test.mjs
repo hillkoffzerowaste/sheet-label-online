@@ -99,6 +99,12 @@ test("routes doPost to OCR by default and Gemini only for explicit mode", async 
   assert.deepEqual(calls, [["ocr", "ocr-file"], ["gemini", "gemini-file"]]);
 });
 
+test("does not throw when the spreadsheet menu hook runs without a UI context", async () => {
+  const context = await loadHelpers();
+
+  assert.doesNotThrow(() => context.onSpreadsheetOpen());
+});
+
 test("marks an OCR order with drive-ocr source and review when fields are missing", async () => {
   const context = await loadHelpers();
   const order = context.buildOcrOrder_(
