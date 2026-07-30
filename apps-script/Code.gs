@@ -272,7 +272,13 @@ function processDriveFile(fileId, requestId) {
       ? buildOcrOrder_(file.getName(), file.getUrl(), getOcrText_())
       : buildOcrOrder_(file.getName(), file.getUrl(), "");
 
-    return finalizeOrderResult_(order, file, shippingExport.inserted, shippingExport.review === 0);
+    return finalizeOrderResult_(
+      order,
+      file,
+      shippingExport.inserted,
+      shippingExport.review === 0,
+      shippingExport.total > 0,
+    );
   } catch (error) {
     if (isRetryableError_(error)) {
       return buildRetryableProcessingResult_(file, error, 0, "drive-ocr", requestId);
@@ -280,7 +286,6 @@ function processDriveFile(fileId, requestId) {
 
     const order = buildFailedOrder_(file, error, "drive-ocr");
     writeOrderResult_(order);
-    moveToReview(file);
     return order;
   }
 }
@@ -468,7 +473,13 @@ function writeShippingLabelCandidates_(labels, fileUrl) {
   };
 }
 
-function finalizeOrderResult_(order, file, shippingLabelsExported, canMoveToProcessed) {
+function finalizeOrderResult_(
+  order,
+  file,
+  shippingLabelsExported,
+  canMoveToProcessed,
+  hasCompleteShippingLabels,
+) {
   order.fileName = file.getName();
   order.fileUrl = file.getUrl();
 
@@ -483,7 +494,7 @@ function finalizeOrderResult_(order, file, shippingLabelsExported, canMoveToProc
 
   var shippingLabelsReady =
     order.source === "drive-ocr" &&
-    Number(shippingLabelsExported) > 0 &&
+    hasCompleteShippingLabels === true &&
     canMoveToProcessed === true;
 
   if (shippingLabelsReady && order.status !== "ready") {
@@ -496,7 +507,11 @@ function finalizeOrderResult_(order, file, shippingLabelsExported, canMoveToProc
   if (!order.shippingLabelsOnly) {
     writeOrderResult_(order);
   }
-  if (order.status === "ready" && canMoveToProcessed !== false) {
+  if (order.source === "drive-ocr") {
+    if (shippingLabelsReady) {
+      moveToProcessed(file);
+    }
+  } else if (order.status === "ready" && canMoveToProcessed !== false) {
     moveToProcessed(file);
   } else {
     moveToReview(file);

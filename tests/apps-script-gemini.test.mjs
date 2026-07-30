@@ -254,8 +254,36 @@ test("moves a complete OCR shipping-label PDF to Processed without a legacy orde
   assert.equal(orderWrites, 0);
 });
 
+test("moves a complete OCR PDF even when every label was already imported", async () => {
+  const context = await loadHelpers();
+  let movedToProcessed = false;
+  let movedToReview = false;
+  const file = {
+    getId: () => "already-imported-id",
+    getName: () => "already-imported.pdf",
+    getUrl: () => "https://drive/already-imported",
+  };
+
+  context.DriveApp = { getFileById: () => file };
+  context.extractTextWithDriveOcr_ = () =>
+    "Route - City\n131/10 Recipient Road, Udon Thani 41230\nG-1\nTH269321699657I\nShopee Order No. 2607302AAA111\nผู้รับ (TO)\nMali One\nผู้ส่ง (FROM)\n66 Sender Road, Chiang Mai 50200";
+  context.writeShippingLabels_ = () => ({ inserted: 0 });
+  context.writeOrderResult_ = () => {};
+  context.isDuplicateOrder = () => false;
+  context.moveToProcessed = () => { movedToProcessed = true; };
+  context.moveToReview = () => { movedToReview = true; };
+
+  const result = context.processDriveFile("already-imported-id");
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.shippingLabelsExported, 0);
+  assert.equal(movedToProcessed, true);
+  assert.equal(movedToReview, false);
+});
+
 test("keeps the PDF available for retry when Drive OCR fails", async () => {
   const context = await loadHelpers();
+  let movedToProcessed = false;
   let movedToReview = false;
   const file = {
     getId: () => "ocr-failure-id",
@@ -270,12 +298,42 @@ test("keeps the PDF available for retry when Drive OCR fails", async () => {
   context.moveToReview = () => {
     movedToReview = true;
   };
+  context.moveToProcessed = () => {
+    movedToProcessed = true;
+  };
 
   const result = context.processDriveFile("ocr-failure-id");
 
   assert.equal(result.status, "failed");
   assert.equal(result.retryable, true);
   assert.equal(result.source, "drive-ocr");
+  assert.equal(movedToProcessed, false);
+  assert.equal(movedToReview, false);
+});
+
+test("keeps an incomplete OCR PDF in Input instead of moving it to Review", async () => {
+  const context = await loadHelpers();
+  let movedToProcessed = false;
+  let movedToReview = false;
+  const file = {
+    getName: () => "incomplete.pdf",
+    getUrl: () => "https://drive/incomplete",
+  };
+  const order = context.buildOcrOrder_(
+    "incomplete.pdf",
+    "https://drive/incomplete",
+    "Shopee\nCustomer: Mali",
+  );
+
+  context.isDuplicateOrder = () => false;
+  context.writeOrderResult_ = () => {};
+  context.moveToProcessed = () => { movedToProcessed = true; };
+  context.moveToReview = () => { movedToReview = true; };
+
+  const result = context.finalizeOrderResult_(order, file, 1, false);
+
+  assert.equal(result.status, "incomplete");
+  assert.equal(movedToProcessed, false);
   assert.equal(movedToReview, false);
 });
 
