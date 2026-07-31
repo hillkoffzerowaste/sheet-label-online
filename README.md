@@ -31,6 +31,12 @@ npx next build
 
 ## Automatic PDF processing
 
+Current policy: every non-retryable PDF is exported to the dated Google Sheet and moved to `Processed`. OCR and explicit Gemini runs never move a file to `Review`. If a field cannot be read, the corresponding cell remains blank for manual correction. Retryable service failures (for example OCR transport errors or Gemini quota limits) stay in the source folder so they can be retried.
+
+The scheduled OCR trigger reads the main input folder. The separate Gemini option also reads the main input folder directly; it is never a Review-folder workflow.
+
+Any older Review-folder wording in this README is legacy and does not describe the current behavior.
+
 Apps Script ใน `apps-script/Code.gs` เป็นผู้ประมวลผลเพียงรายเดียว:
 
 1. ตรวจ PDF ใน Google Drive input folder

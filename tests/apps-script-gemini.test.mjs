@@ -187,7 +187,26 @@ test("returns an OCR shipping-label candidate instead of guessing missing values
 
   assert.equal(labels.length, 1);
   assert.equal(labels[0].source, "drive-ocr");
-  assert.equal(labels[0].status, "review");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("exports incomplete OCR labels as ready rows with blank fields", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("incomplete.pdf", [
+    {
+      marketplace: "TikTok Shop",
+      recipientName: "",
+      shippingAddress: "Bangkok 10120",
+      orderId: "",
+      trackingNumber: "JTTH201622437590",
+    },
+  ]);
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].status, "ready");
+  assert.equal(labels[0].recipientName, "");
+  assert.equal(labels[0].orderId, "");
+  assert.equal(labels[0].reviewReasons.length, 0);
 });
 
 test("parses OCR order fields for Shopee, Lazada, and TikTok Shop", async () => {
@@ -398,7 +417,7 @@ test("prefers the TikTok tracking-and-postal marker over an earlier postal code"
   assert.equal(labels.some((label) => /^\(\+66\)/.test(label.recipientName)), false);
 });
 
-test("keeps only incomplete multi-label TikTok OCR results in review", async () => {
+test("exports incomplete multi-label TikTok OCR results with blanks", async () => {
   const context = await loadHelpers();
   const labels = context.buildOcrShippingLabels_(
     "Tik Tok - 2.pdf",
@@ -415,8 +434,9 @@ test("keeps only incomplete multi-label TikTok OCR results in review", async () 
 
   assert.equal(labels.length, 2);
   assert.equal(labels[0].status, "ready");
-  assert.equal(labels[1].status, "review");
-  assert.equal(labels[1].reviewReasons.includes("recipientName"), true);
+  assert.equal(labels[1].status, "ready");
+  assert.equal(labels[1].recipientName, "");
+  assert.equal(labels[1].reviewReasons.length, 0);
 });
 
 test("rejects punctuation, phone numbers, and route codes as TikTok recipient names", async () => {
@@ -452,8 +472,8 @@ test("rejects punctuation, phone numbers, and route codes as TikTok recipient na
     },
   ]);
 
-  assert.equal(labels.every((label) => label.status === "review"), true);
-  assert.equal(labels.every((label) => label.reviewReasons.includes("recipientName")), true);
+  assert.equal(labels.every((label) => label.status === "ready"), true);
+  assert.equal(labels.every((label) => label.reviewReasons.length === 0), true);
 });
 
 test("accepts OCR text without marketplace branding when the PDF filename identifies TikTok", async () => {
@@ -978,7 +998,7 @@ test("keeps the PDF available for retry when Drive OCR fails", async () => {
   assert.equal(movedToReview, false);
 });
 
-test("keeps an incomplete OCR PDF in Input instead of moving it to Review", async () => {
+test("moves an incomplete OCR PDF to Processed after exporting blank fields", async () => {
   const context = await loadHelpers();
   let movedToProcessed = false;
   let movedToReview = false;
@@ -999,9 +1019,25 @@ test("keeps an incomplete OCR PDF in Input instead of moving it to Review", asyn
 
   const result = context.finalizeOrderResult_(order, file, 1, false);
 
-  assert.equal(result.status, "incomplete");
-  assert.equal(movedToProcessed, false);
+  assert.equal(result.status, "ready");
+  assert.equal(movedToProcessed, true);
   assert.equal(movedToReview, false);
+});
+
+test("runs the batch Gemini option against the main Input folder", async () => {
+  const context = await loadHelpers();
+  const locations = [];
+  context.SpreadsheetApp = {
+    openById: () => ({ toast: () => {} }),
+  };
+  context.listPdfFiles_ = (_folderId, location) => {
+    locations.push(location);
+    return [];
+  };
+
+  context.refreshWithGemini();
+
+  assert.deepEqual(locations, ["input"]);
 });
 
 test("uses Drive OCR once without calling Gemini when quota is exhausted", async () => {
@@ -1037,7 +1073,7 @@ test("uses Drive OCR once without calling Gemini when quota is exhausted", async
 
   assert.equal(ocrCalls, 1);
   assert.equal(result.source, "drive-ocr");
-  assert.equal(movedToProcessed, false);
+  assert.equal(movedToProcessed, true);
 });
 
 test("trashes the temporary OCR document even when OCR text reading fails", async () => {
@@ -1295,7 +1331,7 @@ test("routes malformed and low-confidence Gemini results to read failed", async 
   assert.equal(context.classifyGeminiOrder_(lowConfidence, false).status, "incomplete");
 });
 
-test("normalizes shipping labels and marks duplicate orders for review", async () => {
+test("normalizes duplicate shipping labels as exportable rows", async () => {
   const context = await loadHelpers();
   const labels = context.normalizeShippingLabels_("fixture.pdf", [
     {
@@ -1317,8 +1353,8 @@ test("normalizes shipping labels and marks duplicate orders for review", async (
   assert.equal(labels.length, 2);
   assert.equal(labels[0].marketplace, "Shopee");
   assert.equal(labels[1].marketplace, "TikTok Shop");
-  assert.ok(labels.every((label) => label.status === "review"));
-  assert.ok(labels[0].reviewReasons.includes("duplicateOrderId"));
+  assert.ok(labels.every((label) => label.status === "ready"));
+  assert.equal(labels[0].reviewReasons.length, 0);
 });
 
 test("gives Gemini the Shopee SPX visual extraction anchors", async () => {
@@ -1375,10 +1411,10 @@ test("exports shipping labels even when order extraction fails", async () => {
   assert.equal(result.status, "failed");
   assert.equal(exportedLabels.length, 1);
   assert.equal(exportedLabels[0].orderId, "260728AAA111");
-  assert.equal(movedToProcessed, false);
+  assert.equal(movedToProcessed, true);
 });
 
-test("writes a review shipping row when label extraction is malformed", async () => {
+test("writes an exportable blank shipping row when label extraction is malformed", async () => {
   const context = await loadHelpers();
   const file = {
     getName: () => "malformed.pdf",
@@ -1404,18 +1440,18 @@ test("writes a review shipping row when label extraction is malformed", async ()
 
   assert.equal(result.status, "failed");
   assert.equal(exportedLabels.length, 1);
-  assert.equal(exportedLabels[0].status, "review");
+  assert.equal(exportedLabels[0].status, "ready");
   assert.equal(exportedLabels[0].sourceFileName, "malformed.pdf");
 });
 
-test("creates a review row when Gemini returns no shipping labels", async () => {
+test("creates an exportable blank row when Gemini returns no shipping labels", async () => {
   const context = await loadHelpers();
   const labels = context.prepareShippingLabelsForExport_("empty.pdf", []);
 
   assert.equal(labels.length, 1);
   assert.equal(labels[0].marketplace, "Unknown");
-  assert.equal(labels[0].status, "review");
-  assert.ok(labels[0].reviewReasons.includes("trackingNumber"));
+  assert.equal(labels[0].status, "ready");
+  assert.equal(labels[0].reviewReasons.length, 0);
 });
 
 test("classifies unparseable Gemini body during label extraction as retryable transport error", async () => {

@@ -188,7 +188,7 @@ function onSpreadsheetOpen() {
   ui
     .createMenu("PDF")
     .addItem("รีเฟรช PDF ตอนนี้ (OCR)", "refreshNow")
-    .addItem("เรียก Gemini กับ PDF ใน Review", "refreshWithGemini")
+    .addItem("เรียก Gemini กับ PDF ในโฟลเดอร์หลัก", "refreshWithGemini")
     .addToUi();
   return true;
 }
@@ -202,9 +202,9 @@ function refreshNow() {
     const ready = results.filter(function (result) {
       return result && result.status === "ready";
     }).length;
-    const review = results.length - ready;
+    const failed = results.length - ready;
     safeSpreadsheetToast_(spreadsheet,
-      "รีเฟรชเสร็จแล้ว: " + results.length + " ไฟล์ | พร้อมใช้ " + ready + " | ตรวจสอบ " + review,
+      "รีเฟรชเสร็จแล้ว: " + results.length + " ไฟล์ | พร้อมใช้ " + ready + " | ล้มเหลว/ลองใหม่ " + failed,
       "PDF",
       8,
     );
@@ -300,7 +300,7 @@ function processDriveFile(fileId, requestId) {
       order,
       file,
       shippingExport.inserted,
-      shippingExport.review === 0,
+      true,
       shippingExport.total > 0,
     );
   } catch (error) {
@@ -336,7 +336,7 @@ function processDriveFileWithGemini(fileId, requestId) {
 
   try {
     var order = extractOrderWithGemini_(file);
-    return finalizeOrderResult_(order, file, shippingExport.inserted, shippingExport.review === 0);
+    return finalizeOrderResult_(order, file, shippingExport.inserted, true);
   } catch (error) {
     if (isRetryableError_(error)) {
       return buildRetryableProcessingResult_(file, error, shippingExport.inserted, "gemini", requestId);
@@ -345,17 +345,17 @@ function processDriveFileWithGemini(fileId, requestId) {
     var failedOrder = buildFailedOrder_(file, error, "gemini");
     failedOrder.shippingLabelsExported = shippingExport.inserted;
     writeOrderResult_(failedOrder);
-    moveToReview(file);
+    moveToProcessed(file);
     return failedOrder;
   }
 }
 
 function refreshWithGemini() {
   const spreadsheet = SpreadsheetApp.openById(SPREADSHEET_ID);
-  safeSpreadsheetToast_(spreadsheet, "กำลังเรียก Gemini กับ PDF ใน Review...", "PDF", 5);
+  safeSpreadsheetToast_(spreadsheet, "กำลังเรียก Gemini กับ PDF ในโฟลเดอร์หลัก...", "PDF", 5);
 
   try {
-    const results = listPdfFiles_(getReviewFolderId_(), "review").map(function (pdf) {
+    const results = listPdfFiles_(INPUT_FOLDER_ID, "input").map(function (pdf) {
       const result = processDriveFileWithGemini(pdf.fileId);
       logProcessingResult_(pdf.fileId, "gemini", result, "");
       return result;
@@ -512,7 +512,7 @@ function finalizeOrderResult_(
   const classification = order.source === "gemini"
     ? classifyGeminiOrder_(order, isDuplicate)
     : classifyOcrOrder_(order, isDuplicate);
-  order.status = classification.status;
+  order.status = "ready";
   order.reason = classification.reason;
   order.missingFields = classification.missingFields;
   order.shippingLabelsExported = shippingLabelsExported;
@@ -522,7 +522,7 @@ function finalizeOrderResult_(
     hasCompleteShippingLabels === true &&
     canMoveToProcessed === true;
 
-  if (shippingLabelsReady && order.status !== "ready") {
+  if (shippingLabelsReady && classification.status !== "ready") {
     order.status = "ready";
     order.reason = "Shipping label data complete";
     order.missingFields = [];
@@ -533,13 +533,9 @@ function finalizeOrderResult_(
     writeOrderResult_(order);
   }
   if (order.source === "drive-ocr") {
-    if (shippingLabelsReady) {
-      moveToProcessed(file);
-    }
-  } else if (order.status === "ready" && canMoveToProcessed !== false) {
     moveToProcessed(file);
-  } else {
-    moveToReview(file);
+  } else if (canMoveToProcessed !== false) {
+    moveToProcessed(file);
   }
   return order;
 }
@@ -582,21 +578,15 @@ function prepareShippingLabelsForExport_(fileName, values) {
 
   return [
     {
-      id: fileName + "-review",
+      id: fileName + "-ocr",
       sourceFileName: fileName,
       marketplace: "Unknown",
       recipientName: "",
       shippingAddress: "",
       orderId: "",
       trackingNumber: "",
-      status: "review",
-      reviewReasons: [
-        "marketplace",
-        "recipientName",
-        "shippingAddress",
-        "orderId",
-        "trackingNumber",
-      ],
+      status: "ready",
+      reviewReasons: [],
     },
   ];
 }
@@ -1756,8 +1746,8 @@ function normalizeShippingLabels_(fileName, values) {
       status: "ready",
       reviewReasons: [],
     };
-    label.reviewReasons = getShippingLabelReviewReasons_(label);
-    label.status = label.reviewReasons.length > 0 ? "review" : "ready";
+    label.reviewReasons = [];
+    label.status = "ready";
     return label;
   });
 
@@ -1771,8 +1761,8 @@ function normalizeShippingLabels_(fileName, values) {
     if (duplicateTrackingNumbers.indexOf(label.trackingNumber) >= 0) {
       label.reviewReasons.push("duplicateTrackingNumber");
     }
-    label.reviewReasons = uniqueValues_(label.reviewReasons);
-    label.status = label.reviewReasons.length > 0 ? "review" : "ready";
+    label.reviewReasons = [];
+    label.status = "ready";
     return label;
   });
 }
@@ -2191,8 +2181,8 @@ function ensureOcrLabelCompleteness_(fileName, text, labels) {
       shippingAddress: "",
       orderId: "",
       trackingNumber: "",
-      status: "review",
-      reviewReasons: ["labelCount"],
+      status: "ready",
+      reviewReasons: [],
     });
   }
   return candidates;
@@ -2280,25 +2270,13 @@ function parseOcrShippingLabels_(fileName, text) {
   var shippingAddress = readOcrField_(text, ["Address"]);
 
   if (!recipientName && !orderId && !trackingNumber && !shippingAddress) {
-    return [
-      {
-        id: fileName + "-ocr-unknown",
-        sourceFileName: fileName,
-        marketplace: "Unknown",
-        recipientName: "",
-        shippingAddress: "",
-        orderId: "",
-        trackingNumber: "",
-        status: "review",
-        reviewReasons: [
-          "marketplace",
-          "recipientName",
-          "shippingAddress",
-          "orderId",
-          "trackingNumber",
-        ],
-      },
-    ];
+    return normalizeShippingLabels_(fileName, [{
+      marketplace: "Unknown",
+      recipientName: "",
+      shippingAddress: "",
+      orderId: "",
+      trackingNumber: "",
+    }]);
   }
 
   return normalizeShippingLabels_(fileName, [
