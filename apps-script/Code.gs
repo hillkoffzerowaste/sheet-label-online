@@ -1106,6 +1106,26 @@ function enrichOcrWithCloudReaders_(file, text, labels) {
       var barcodes = enrichment && Array.isArray(enrichment.barcodes)
         ? enrichment.barcodes.join("\n")
         : "";
+      var layoutTexts = enrichment && Array.isArray(enrichment.layoutTexts)
+        ? enrichment.layoutTexts
+        : [];
+      var layoutColumns = enrichment && Array.isArray(enrichment.layoutColumns)
+        ? enrichment.layoutColumns
+        : [];
+      if (
+        detectMarketplaceForFile_(file.getName(), result.text) === "TikTok Shop" &&
+        (layoutColumns.length > 0 || layoutTexts.length > 0)
+      ) {
+        var layoutLabels = layoutColumns.length
+          ? parseTikTokVisionLayoutColumns_(file.getName(), layoutColumns)
+          : parseTikTokVisionLayoutLabels_(file.getName(), layoutTexts);
+        if (scoreOcrShippingLabels_(layoutLabels) > scoreOcrShippingLabels_(result.labels)) {
+          result.text = layoutTexts.join("\n\n");
+          result.labels = layoutLabels;
+          result.used = true;
+        }
+        if (isUsableOcrShippingLabels_(result.labels)) break;
+      }
       if (!extraText && !barcodes) continue;
 
       if (readers[index].name === "barcode-reader") {
@@ -1249,6 +1269,8 @@ function extractTextWithVision_(file) {
   return {
     text: collectVisionText_(response),
     barcodes: [],
+    layoutTexts: collectVisionLayoutLabelTexts_(response),
+    layoutColumns: collectVisionLayoutColumns_(response),
   };
 }
 
@@ -1273,6 +1295,267 @@ function collectVisionText_(response) {
     });
   });
   return texts.filter(Boolean).join("\n");
+}
+
+function collectVisionLayoutLabelTexts_(response) {
+  return collectVisionLayoutColumns_(response).map(function (column) { return column.text; });
+}
+
+function collectVisionLayoutColumns_(response) {
+  var columns = [];
+  (response && response.responses || []).forEach(function (fileResponse) {
+    (fileResponse.responses || []).forEach(function (pageResponse) {
+      var pages = pageResponse && pageResponse.fullTextAnnotation
+        ? pageResponse.fullTextAnnotation.pages || []
+        : [];
+      pages.forEach(function (page) {
+        splitVisionPageIntoColumnsData_(page).forEach(function (column) {
+          if (/\bJTTH[A-Z0-9-]{6,}\b/i.test(column.text)) columns.push(column);
+        });
+      });
+    });
+  });
+  return columns;
+}
+
+function splitVisionPageIntoColumns_(page) {
+  return splitVisionPageIntoColumnsData_(page).map(function (column) { return column.text; });
+}
+
+function splitVisionPageIntoColumnsData_(page) {
+  var items = collectVisionPageLayoutItems_(page);
+  if (!items.length) return [];
+
+  var pageWidth = Number(page && page.width) || 0;
+  var xValues = items.map(function (item) { return item.x; });
+  var minX = Math.min.apply(null, xValues);
+  var maxX = Math.max.apply(null, xValues);
+  var usesNormalizedCoordinates = items.some(function (item) { return item.normalized; });
+  var splitX = usesNormalizedCoordinates ? 0.5 : pageWidth / 2;
+  if (!splitX && maxX > minX) splitX = minX + ((maxX - minX) / 2);
+
+  var columns = [[], []];
+  items.forEach(function (item) {
+    columns[splitX && item.x >= splitX ? 1 : 0].push(item);
+  });
+  return columns.map(function (columnItems) {
+    return { items: columnItems, text: joinVisionLayoutItems_(columnItems) };
+  }).filter(function (column) { return Boolean(column.text); });
+}
+
+function collectVisionPageLayoutItems_(page) {
+  var wordItems = [];
+  var paragraphItems = [];
+  (page && page.blocks || []).forEach(function (block) {
+    (block.paragraphs || []).forEach(function (paragraph) {
+      var paragraphItem = makeVisionLayoutItem_(collectVisionParagraphText_(paragraph), paragraph.boundingBox);
+      if (paragraphItem) paragraphItems.push(paragraphItem);
+      (paragraph.words || []).forEach(function (word) {
+        var item = makeVisionLayoutItem_(collectVisionWordText_(word), word.boundingBox);
+        if (item) wordItems.push(item);
+      });
+    });
+  });
+  // Vision can merge two side-by-side labels into one paragraph. Individual word
+  // positions preserve the physical column in that response, so prefer them.
+  return wordItems.length >= 4 ? wordItems : paragraphItems;
+}
+
+function makeVisionLayoutItem_(text, boundingBox) {
+  if (!text) return null;
+  var box = boundingBox || {};
+  var normalized = (!box.vertices || !box.vertices.length) &&
+    Boolean(box.normalizedVertices && box.normalizedVertices.length);
+  var vertices = box.vertices || box.normalizedVertices || [];
+  if (!vertices.length) return null;
+  var xValues = vertices.map(function (vertex) { return Number(vertex.x); }).filter(isFinite);
+  var yValues = vertices.map(function (vertex) { return Number(vertex.y); }).filter(isFinite);
+  if (!xValues.length || !yValues.length) return null;
+  var minX = Math.min.apply(null, xValues);
+  var maxX = Math.max.apply(null, xValues);
+  var minY = Math.min.apply(null, yValues);
+  var maxY = Math.max.apply(null, yValues);
+  return {
+    text: text,
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    height: Math.max(normalized ? 0.001 : 1, maxY - minY),
+    normalized: normalized,
+  };
+}
+
+function joinVisionLayoutItems_(items) {
+  if (!items.length) return "";
+  var sorted = items.slice().sort(function (left, right) {
+    return left.y === right.y ? left.x - right.x : left.y - right.y;
+  });
+  var heights = sorted.map(function (item) { return item.height; }).sort(function (left, right) {
+    return left - right;
+  });
+  var medianHeight = heights[Math.floor(heights.length / 2)] || 12;
+  var minTolerance = sorted.some(function (item) { return item.normalized; }) ? 0.003 : 5;
+  var tolerance = Math.max(minTolerance, medianHeight * 0.65);
+  var lines = [];
+  sorted.forEach(function (item) {
+    var line = lines[lines.length - 1];
+    if (!line || Math.abs(item.y - line.y) > tolerance) {
+      lines.push({ y: item.y, items: [item] });
+      return;
+    }
+    line.items.push(item);
+    line.y = (line.y * (line.items.length - 1) + item.y) / line.items.length;
+  });
+  return lines.map(function (line) {
+    return line.items.sort(function (left, right) { return left.x - right.x; })
+      .map(function (item) { return item.text; })
+      .join(" ");
+  }).join("\n").trim();
+}
+
+function collectVisionParagraphText_(paragraph) {
+  return (paragraph && paragraph.words || []).map(function (word) {
+    return (word.symbols || []).map(function (symbol) { return symbol.text || ""; }).join("");
+  }).filter(Boolean).join(" ").trim();
+}
+
+function collectVisionWordText_(word) {
+  return (word && word.symbols || []).map(function (symbol) {
+    return symbol.text || "";
+  }).join("").trim();
+}
+
+function parseTikTokVisionLayoutLabels_(fileName, layoutTexts) {
+  var values = [];
+  (Array.isArray(layoutTexts) ? layoutTexts : []).forEach(function (text) {
+    parseTikTokOcrShippingLabels_(fileName, text).forEach(function (label) {
+      values.push({
+        marketplace: "TikTok Shop",
+        recipientName: label.recipientName,
+        shippingAddress: label.shippingAddress,
+        orderId: label.orderId,
+        trackingNumber: label.trackingNumber,
+      });
+    });
+  });
+  return normalizeShippingLabels_(fileName, values);
+}
+
+function parseTikTokVisionLayoutColumns_(fileName, columns) {
+  var values = (Array.isArray(columns) ? columns : []).map(function (column) {
+    var items = Array.isArray(column && column.items) ? column.items : [];
+    var trackingNumbers = items.map(function (item) { return item.text; }).filter(function (text) {
+      return /^JTTH[A-Z0-9-]{6,}$/i.test(String(text || "").trim());
+    });
+    var orderIds = items.map(function (item) { return String(item.text || "").trim(); }).filter(function (text) {
+      return /^\d{15,22}$/.test(text);
+    });
+    return {
+      marketplace: "TikTok Shop",
+      recipientName: extractTikTokVisionRecipientByPosition_(items) ||
+        extractTikTokVisionRecipientNearPhone_(items),
+      shippingAddress: extractTikTokVisionAddress_(items),
+      orderId: orderIds.length ? orderIds[orderIds.length - 1] : "",
+      trackingNumber: mostFrequentText_(trackingNumbers),
+    };
+  });
+  return normalizeShippingLabels_(fileName, values);
+}
+
+function mostFrequentText_(values) {
+  var counts = {};
+  (values || []).forEach(function (value) { counts[value] = (counts[value] || 0) + 1; });
+  return Object.keys(counts).sort(function (left, right) { return counts[right] - counts[left]; })[0] || "";
+}
+
+function extractTikTokVisionRecipient_(items) {
+  var marker = (items || []).filter(function (item) { return String(item.text || "").trim() === "ถึง"; })[0];
+  var phone = findTikTokVisionPhone_(items);
+  var candidates = [];
+  if (marker) {
+    candidates = (items || []).filter(function (item) {
+      return item.x > marker.x && item.y >= marker.y - 0.02 && item.y <= marker.y + 0.03 &&
+        (!phone || item.y < phone.y - 0.01);
+    });
+  } else if (phone) {
+    candidates = (items || []).filter(function (item) {
+      return item.y >= phone.y - 0.06 && item.y < phone.y - 0.01;
+    });
+  }
+  return joinVisionLayoutItems_(candidates).replace(/\n/g, " ").replace(/\b(?:JTTH|PICK|COD)\b.*$/i, "").trim();
+}
+
+function extractTikTokVisionAddress_(items) {
+  var phone = findTikTokVisionPhone_(items);
+  if (!phone) return "";
+  var postalCodes = (items || []).filter(function (item) {
+    return /^\d{5}$/.test(String(item.text || "").trim()) && item.y > phone.y;
+  }).sort(function (left, right) { return left.y - right.y; });
+  var postal = postalCodes[0];
+  if (!postal) return "";
+  var addressItems = (items || []).filter(function (item) {
+    var text = String(item.text || "").trim();
+    return item.y > phone.y + 0.01 && item.y <= postal.y + 0.01 &&
+      !/^JTTH[A-Z0-9-]{6,}$/i.test(text) &&
+      !/^(?:PICK|UP|COD|Shipping|Date|Order|ID)$/i.test(text);
+  });
+  return joinVisionLayoutItems_(addressItems).replace(/\n/g, " ").trim();
+}
+
+function findTikTokVisionPhone_(items) {
+  return (items || []).filter(function (item) {
+    return /^\+?66$/.test(String(item.text || "").replace(/\s/g, ""));
+  }).sort(function (left, right) { return left.y - right.y; })[0] || null;
+}
+
+function extractTikTokVisionRecipientFromPosition_(items) {
+  var values = Array.isArray(items) ? items : [];
+  var marker = values.filter(function (item) {
+    return String(item.text || "").trim() === "ถึง";
+  })[0];
+  if (!marker) return "";
+  var phone = findTikTokVisionPhone_(values);
+  var candidates = values.filter(function (item) {
+    var text = String(item.text || "").trim();
+    return item.x > marker.x && item.y >= marker.y - 0.02 && item.y <= marker.y + 0.03 &&
+      (!phone || item.y < phone.y - 0.01) &&
+      !/^JTTH[A-Z0-9-]{6,}$/i.test(text) &&
+      !/^(?:PICK|UP|COD|Order|ID|Shipping|Date)$/i.test(text) &&
+      !/^[A-Z]?\d{2,4}[A-Z]?(?:-\d+)?$/i.test(text);
+  });
+  return joinVisionLayoutItems_(candidates).replace(/\n/g, " ").trim();
+}
+
+function extractTikTokVisionRecipientNearPhone_(items) {
+  var values = Array.isArray(items) ? items : [];
+  var phone = findTikTokVisionPhone_(values);
+  if (!phone) return "";
+  var candidates = values.filter(function (item) {
+    var text = String(item.text || "").trim();
+    return item.y >= phone.y - 0.06 && item.y < phone.y - 0.01 &&
+      !/^JTTH[A-Z0-9-]{6,}$/i.test(text) &&
+      !/^(?:PICK|UP|COD|Order|ID|Shipping|Date|From)$/i.test(text) &&
+      !/^[A-Z]?\d{2,4}[A-Z]?(?:-\d+)?$/i.test(text);
+  });
+  return joinVisionLayoutItems_(candidates).replace(/\n/g, " ").trim();
+}
+
+function extractTikTokVisionRecipientByPosition_(items) {
+  var values = Array.isArray(items) ? items : [];
+  var markerText = String.fromCharCode(0x0e16, 0x0e36, 0x0e07);
+  var marker = values.filter(function (item) {
+    return String(item.text || "").trim() === markerText;
+  })[0];
+  if (!marker) return "";
+  var phone = findTikTokVisionPhone_(values);
+  var candidates = values.filter(function (item) {
+    var text = String(item.text || "").trim();
+    return item.x > marker.x && item.y >= marker.y - 0.02 && item.y <= marker.y + 0.03 &&
+      (!phone || item.y < phone.y - 0.01) &&
+      !/^JTTH[A-Z0-9-]{6,}$/i.test(text) &&
+      !/^(?:PICK|UP|COD|Order|ID|Shipping|Date)$/i.test(text) &&
+      !/^[A-Z]?\d{2,4}[A-Z]?(?:-\d+)?$/i.test(text);
+  });
+  return joinVisionLayoutItems_(candidates).replace(/\n/g, " ").trim();
 }
 
 function collectVisionBarcodeValues_(response) {
@@ -1497,11 +1780,27 @@ function normalizeShippingLabels_(fileName, values) {
 function getShippingLabelReviewReasons_(label) {
   const reasons = [];
   if (label.marketplace === "Unknown") reasons.push("marketplace");
-  if (!label.recipientName) reasons.push("recipientName");
+  if (
+    !label.recipientName ||
+    (label.marketplace === "TikTok Shop" && !isLikelyTikTokRecipientName_(label.recipientName))
+  ) {
+    reasons.push("recipientName");
+  }
   if (!label.shippingAddress) reasons.push("shippingAddress");
   if (!label.orderId) reasons.push("orderId");
   if (!label.trackingNumber) reasons.push("trackingNumber");
   return reasons;
+}
+
+function isLikelyTikTokRecipientName_(value) {
+  var name = String(value || "").trim();
+  if (name.length < 2) return false;
+  if (!/[A-Za-z\u0E00-\u0E7F]/.test(name)) return false;
+  if (/^\(\+?\d{2,3}\)\d|^\+?\d{8,}/.test(name)) return false;
+  if (/^JTTH[A-Z0-9-]{6,}\b/i.test(name)) return false;
+  if (/^[A-Z]?\d{2,4}[A-Z]?$/i.test(name)) return false;
+  if (/^(?:nickname|order\s*id|shipping date|estimated date|in transit by)\b/i.test(name)) return false;
+  return true;
 }
 
 function duplicateShippingLabelValues_(labels, fieldName) {
@@ -2063,6 +2362,24 @@ function parseTikTokOcrShippingLabels_(fileName, text) {
   var multiLabelValues = parseTikTokMultiLabelOcr_(lines, value);
   if (multiLabelValues.length > 1) {
     return normalizeShippingLabels_(fileName, multiLabelValues);
+  }
+  var columnTrackingEntries = collectTikTokTrackingEntries_(lines);
+  if (columnTrackingEntries.length === 1) {
+    var columnEntry = columnTrackingEntries[0];
+    var columnRecipient = findTikTokRecipientAfterPostal_(lines, columnEntry, lines.length);
+    var columnAddress = readTikTokAddressBeforeTracking_(lines, columnEntry.lineIndex, -1);
+    if (columnRecipient.name && columnAddress) {
+      if (columnRecipient.postalCode && columnAddress.indexOf(columnRecipient.postalCode) < 0) {
+        columnAddress = (columnAddress + " " + columnRecipient.postalCode).trim();
+      }
+      return normalizeShippingLabels_(fileName, [{
+        marketplace: "TikTok Shop",
+        recipientName: columnRecipient.name,
+        shippingAddress: columnAddress,
+        orderId: readOcrInlineField_(value, "Order\\s*ID\\s*:\\s*([A-Z0-9-]+)"),
+        trackingNumber: columnEntry.value,
+      }]);
+    }
   }
   var trackingMatch = /\bJTTH[A-Z0-9-]{6,}\b/i.exec(value);
   var recipientBlock = parseTikTokRecipientBeforePostal_(lines);

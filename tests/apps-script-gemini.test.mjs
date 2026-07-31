@@ -419,6 +419,43 @@ test("keeps only incomplete multi-label TikTok OCR results in review", async () 
   assert.equal(labels[1].reviewReasons.includes("recipientName"), true);
 });
 
+test("rejects punctuation, phone numbers, and route codes as TikTok recipient names", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("Tik Tok - 1.pdf", [
+    {
+      marketplace: "TikTok Shop",
+      recipientName: ",",
+      shippingAddress: "Bangkok 10120",
+      orderId: "585284651433821511",
+      trackingNumber: "JTTH201622437590",
+    },
+    {
+      marketplace: "TikTok Shop",
+      recipientName: "(+66)09******99",
+      shippingAddress: "Bangkok 10120",
+      orderId: "585284651433821512",
+      trackingNumber: "JTTH201622437591",
+    },
+    {
+      marketplace: "TikTok Shop",
+      recipientName: "001A",
+      shippingAddress: "Bangkok 10120",
+      orderId: "585284651433821513",
+      trackingNumber: "JTTH201622437592",
+    },
+    {
+      marketplace: "TikTok Shop",
+      recipientName: "JTTH201622437590 จาก H",
+      shippingAddress: "Bangkok 10120",
+      orderId: "585284651433821514",
+      trackingNumber: "JTTH201622437593",
+    },
+  ]);
+
+  assert.equal(labels.every((label) => label.status === "review"), true);
+  assert.equal(labels.every((label) => label.reviewReasons.includes("recipientName")), true);
+});
+
 test("accepts OCR text without marketplace branding when the PDF filename identifies TikTok", async () => {
   const context = await loadHelpers();
 
@@ -502,6 +539,242 @@ test("uses a complete OCR reader result without concatenating multi-label layout
 
   assert.equal(result.used, true);
   assert.equal(result.text, visionText);
+  assert.equal(result.labels.length, 2);
+  assert.equal(result.labels.every((label) => label.status === "ready"), true);
+  assert.equal(result.labels[0].recipientName, "Rattana");
+  assert.equal(result.labels[1].recipientName, "Pailin");
+});
+
+test("splits Google Vision TikTok paragraphs by their left and right page positions", async () => {
+  const context = await loadHelpers();
+  const paragraph = (text, x, y) => ({
+    boundingBox: {
+      vertices: [{ x, y }, { x: x + 80, y }, { x: x + 80, y: y + 20 }, { x, y: y + 20 }],
+    },
+    words: text.split(" ").map((word) => ({
+      symbols: [...word].map((symbol) => ({ text: symbol })),
+    })),
+  });
+  const response = {
+    responses: [{
+      responses: [{
+        fullTextAnnotation: {
+          pages: [{
+            width: 1000,
+            blocks: [{
+              paragraphs: [
+                paragraph("21 Moo 12 30230", 80, 80),
+                paragraph("JTTH201061537596", 80, 140),
+                paragraph("Order ID: 585283162771720012", 80, 200),
+                paragraph("JTTH201061537596 30230", 80, 260),
+                paragraph("Rattana", 80, 300),
+                paragraph("August Condo 10120", 620, 80),
+                paragraph("JTTH201622437590", 620, 140),
+                paragraph("Order ID: 585284651433821511", 620, 200),
+                paragraph("JTTH201622437590 10120", 620, 260),
+                paragraph("Pailin", 620, 300),
+              ],
+            }],
+          }],
+        },
+      }],
+    }],
+  };
+
+  const blocks = context.collectVisionLayoutLabelTexts_(response);
+  const labels = context.parseTikTokVisionLayoutLabels_("Tik Tok - 1.pdf", blocks);
+
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /Rattana/);
+  assert.match(blocks[1], /Pailin/);
+  assert.equal(labels.length, 2);
+  assert.equal(labels[0].recipientName, "Rattana");
+  assert.equal(labels[1].recipientName, "Pailin");
+  assert.equal(labels.every((label) => label.status === "ready"), true);
+});
+
+test("splits Google Vision columns when the page width is omitted", async () => {
+  const context = await loadHelpers();
+  const paragraph = (text, x, y) => ({
+    boundingBox: {
+      vertices: [{ x, y }, { x: x + 50, y }, { x: x + 50, y: y + 20 }, { x, y: y + 20 }],
+    },
+    words: text.split(" ").map((word) => ({
+      symbols: [...word].map((symbol) => ({ text: symbol })),
+    })),
+  });
+  const response = {
+    responses: [{
+      responses: [{
+        fullTextAnnotation: {
+          pages: [{
+            blocks: [{
+              paragraphs: [
+                paragraph("JTTH201061537596", 40, 100),
+                paragraph("Rattana", 40, 160),
+                paragraph("JTTH201622437590", 640, 100),
+                paragraph("Pailin", 640, 160),
+              ],
+            }],
+          }],
+        },
+      }],
+    }],
+  };
+
+  const blocks = context.collectVisionLayoutLabelTexts_(response);
+
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /Rattana/);
+  assert.match(blocks[1], /Pailin/);
+});
+
+test("splits interleaved Google Vision words using their individual positions", async () => {
+  const context = await loadHelpers();
+  const word = (text, x, y) => ({
+    boundingBox: {
+      vertices: [{ x, y }, { x: x + 70, y }, { x: x + 70, y: y + 20 }, { x, y: y + 20 }],
+    },
+    symbols: [...text].map((symbol) => ({ text: symbol })),
+  });
+  const response = {
+    responses: [{
+      responses: [{
+        fullTextAnnotation: {
+          pages: [{
+            blocks: [{
+              paragraphs: [{
+                boundingBox: {
+                  vertices: [{ x: 0, y: 0 }, { x: 1000, y: 0 }, { x: 1000, y: 400 }, { x: 0, y: 400 }],
+                },
+                words: [
+                  word("JTTH201061537596", 60, 100),
+                  word("JTTH201622437590", 660, 100),
+                  word("Rattana", 60, 160),
+                  word("Pailin", 660, 160),
+                ],
+              }],
+            }],
+          }],
+        },
+      }],
+    }],
+  };
+
+  const blocks = context.collectVisionLayoutLabelTexts_(response);
+
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /JTTH201061537596/);
+  assert.match(blocks[0], /Rattana/);
+  assert.match(blocks[1], /JTTH201622437590/);
+  assert.match(blocks[1], /Pailin/);
+});
+
+test("uses normalized Vision coordinates even when the page width is present", async () => {
+  const context = await loadHelpers();
+  const word = (text, x, y) => ({
+    boundingBox: {
+      normalizedVertices: [{ x, y }, { x: x + 0.05, y }, { x: x + 0.05, y: y + 0.02 }, { x, y: y + 0.02 }],
+    },
+    symbols: [...text].map((symbol) => ({ text: symbol })),
+  });
+  const response = {
+    responses: [{
+      responses: [{
+        fullTextAnnotation: {
+          pages: [{
+            width: 595,
+            blocks: [{
+              paragraphs: [{
+                words: [
+                  word("JTTH201061537596", 0.08, 0.10),
+                  word("JTTH201622437590", 0.62, 0.10),
+                  word("Rattana", 0.08, 0.16),
+                  word("Pailin", 0.62, 0.16),
+                ],
+              }],
+            }],
+          }],
+        },
+      }],
+    }],
+  };
+
+  const blocks = context.collectVisionLayoutLabelTexts_(response);
+
+  assert.equal(blocks.length, 2);
+  assert.match(blocks[0], /Rattana/);
+  assert.match(blocks[1], /Pailin/);
+});
+
+test("extracts TikTok fields from a positioned Vision label column", async () => {
+  const context = await loadHelpers();
+  const item = (text, x, y) => ({ text, x, y, height: 0.02, normalized: true });
+  const labels = context.parseTikTokVisionLayoutColumns_("Tik Tok - 1.pdf", [{
+    items: [
+      item("JTTH201061537596", 0.02, 0.12),
+      item("ถึง", 0.04, 0.34),
+      item("ร", 0.07, 0.34),
+      item("ต", 0.08, 0.34),
+      item("นา", 0.10, 0.34),
+      item("+66", 0.07, 0.38),
+      item("21", 0.04, 0.43),
+      item("หมู่", 0.08, 0.43),
+      item("12", 0.13, 0.43),
+      item("ต.", 0.16, 0.43),
+      item("พระพุทธ", 0.19, 0.43),
+      item("เฉลิมพระเกียรติ", 0.08, 0.46),
+      item("นครราชสีมา", 0.08, 0.49),
+      item("30230", 0.08, 0.52),
+      item("585283162771720012", 0.10, 0.72),
+    ],
+    text: "unused",
+  }]);
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].recipientName, "ร ต นา");
+  assert.match(labels[0].shippingAddress, /21 หมู่ 12/);
+  assert.match(labels[0].shippingAddress, /30230/);
+  assert.equal(labels[0].orderId, "585283162771720012");
+  assert.equal(labels[0].trackingNumber, "JTTH201061537596");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("prefers Google Vision layout labels over interleaved TikTok OCR text", async () => {
+  const context = await loadHelpers();
+  const file = {
+    getName: () => "Tik Tok - 1.pdf",
+    getUrl: () => "https://drive/tiktok",
+  };
+  const driveText = "JTTH201061537596\nOrder ID: 585283162771720012";
+  const layoutTexts = [
+    [
+      "21 Moo 12 30230",
+      "JTTH201061537596",
+      "Order ID: 585283162771720012",
+      "JTTH201061537596 30230",
+      "Rattana",
+    ].join("\n"),
+    [
+      "August Condo 10120",
+      "JTTH201622437590",
+      "Order ID: 585284651433821511",
+      "JTTH201622437590 10120",
+      "Pailin",
+    ].join("\n"),
+  ];
+  const labels = context.buildOcrShippingLabels_(file.getName(), file.getUrl(), driveText);
+
+  context.extractBarcodesWithVision_ = () => ({ text: "", barcodes: [] });
+  context.extractTextWithVision_ = () => ({
+    text: "interleaved and unusable text",
+    barcodes: [],
+    layoutTexts,
+  });
+  context.extractTextWithDocumentAi_ = () => ({ text: "", barcodes: [] });
+
+  const result = context.enrichOcrWithCloudReaders_(file, driveText, labels);
+
   assert.equal(result.labels.length, 2);
   assert.equal(result.labels.every((label) => label.status === "ready"), true);
   assert.equal(result.labels[0].recipientName, "Rattana");
