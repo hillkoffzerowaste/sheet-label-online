@@ -1106,12 +1106,23 @@ function enrichOcrWithCloudReaders_(file, text, labels) {
       var barcodes = enrichment && Array.isArray(enrichment.barcodes)
         ? enrichment.barcodes.join("\n")
         : "";
-      var combinedText = [result.text, extraText, barcodes].filter(Boolean).join("\n");
-      if (combinedText === result.text) continue;
+      if (!extraText && !barcodes) continue;
 
-      result.text = combinedText;
-      result.labels = buildOcrShippingLabels_(file.getName(), file.getUrl(), result.text);
-      result.used = true;
+      if (readers[index].name === "barcode-reader") {
+        var barcodeText = [result.text, barcodes].filter(Boolean).join("\n");
+        if (barcodeText === result.text) continue;
+        result.text = barcodeText;
+        result.labels = buildOcrShippingLabels_(file.getName(), file.getUrl(), result.text);
+        result.used = true;
+      } else {
+        var readerText = [extraText, barcodes].filter(Boolean).join("\n");
+        var readerLabels = buildOcrShippingLabels_(file.getName(), file.getUrl(), readerText);
+        if (scoreOcrShippingLabels_(readerLabels) > scoreOcrShippingLabels_(result.labels)) {
+          result.text = readerText;
+          result.labels = readerLabels;
+          result.used = true;
+        }
+      }
       if (isUsableOcrShippingLabels_(result.labels)) break;
     } catch (error) {
       console.warn(
@@ -1121,6 +1132,20 @@ function enrichOcrWithCloudReaders_(file, text, labels) {
     }
   }
   return result;
+}
+
+function scoreOcrShippingLabels_(labels) {
+  return (Array.isArray(labels) ? labels : []).reduce(function (score, label) {
+    if (!label) return score;
+    var fields = [
+      label.marketplace,
+      label.recipientName,
+      label.shippingAddress,
+      label.orderId,
+      label.trackingNumber,
+    ];
+    return score + (label.status === "ready" ? 100 : 0) + fields.filter(Boolean).length;
+  }, 0);
 }
 
 function getCloudReaderConfig_() {
@@ -1186,11 +1211,7 @@ function extractBarcodesWithVision_(file) {
   if (!config.projectId) return { text: "", barcodes: [] };
 
   var response = fetchGoogleCloudOcr_(
-    "https://vision.googleapis.com/v1/projects/" +
-      encodeURIComponent(config.projectId) +
-      "/locations/" +
-      encodeURIComponent(config.location) +
-      "/files:annotate",
+    buildVisionFileAnnotateUrl_(config),
     {
       requests: [{
         inputConfig: {
@@ -1213,11 +1234,7 @@ function extractTextWithVision_(file) {
   if (!config.projectId) return { text: "", barcodes: [] };
 
   var response = fetchGoogleCloudOcr_(
-    "https://vision.googleapis.com/v1/projects/" +
-      encodeURIComponent(config.projectId) +
-      "/locations/" +
-      encodeURIComponent(config.location) +
-      "/files:annotate",
+    buildVisionFileAnnotateUrl_(config),
     {
       requests: [{
         inputConfig: {
@@ -1233,6 +1250,15 @@ function extractTextWithVision_(file) {
     text: collectVisionText_(response),
     barcodes: [],
   };
+}
+
+function buildVisionFileAnnotateUrl_(config) {
+  var location = String((config && config.location) || "us").trim().toLowerCase();
+  var host = location === "global" ? "vision.googleapis.com" : location + "-vision.googleapis.com";
+  return "https://" + host + "/v1/projects/" +
+    encodeURIComponent(config.projectId) +
+    "/locations/" + encodeURIComponent(location) +
+    "/files:annotate";
 }
 
 function collectVisionText_(response) {
@@ -2034,7 +2060,12 @@ function extractLazadaTrackingNumber_(text) {
 function parseTikTokOcrShippingLabels_(fileName, text) {
   var value = normalizeOcrText_(text);
   var lines = value.split(/\r?\n/).map(function (line) { return line.trim(); });
+  var multiLabelValues = parseTikTokMultiLabelOcr_(lines, value);
+  if (multiLabelValues.length > 1) {
+    return normalizeShippingLabels_(fileName, multiLabelValues);
+  }
   var trackingMatch = /\bJTTH[A-Z0-9-]{6,}\b/i.exec(value);
+  var recipientBlock = parseTikTokRecipientBeforePostal_(lines);
   var postalIndex = -1;
   for (var i = lines.length - 1; i >= 0; i--) {
     if (/^\d{5}$/.test(lines[i])) {
@@ -2043,8 +2074,8 @@ function parseTikTokOcrShippingLabels_(fileName, text) {
     }
   }
 
-  var recipientName = "";
-  if (postalIndex >= 0) {
+  var recipientName = recipientBlock.name;
+  if (!recipientName && postalIndex >= 0) {
     var recipientParts = [];
     for (var recipientIndex = postalIndex + 1; recipientIndex < lines.length; recipientIndex++) {
       if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}$/.test(lines[recipientIndex])) break;
@@ -2073,7 +2104,9 @@ function parseTikTokOcrShippingLabels_(fileName, text) {
     }
   }
 
-  var addressParts = leadingAddress.concat(trailingAddress);
+  var addressParts = recipientBlock.addressParts.length
+    ? recipientBlock.addressParts
+    : leadingAddress.concat(trailingAddress);
   if (postalIndex >= 0 && addressParts.indexOf(lines[postalIndex]) < 0) {
     addressParts.push(lines[postalIndex]);
   }
@@ -2085,6 +2118,125 @@ function parseTikTokOcrShippingLabels_(fileName, text) {
     orderId: readOcrInlineField_(value, "Order\\s*ID\\s*:\\s*([A-Z0-9-]+)"),
     trackingNumber: trackingMatch ? trackingMatch[0] : "",
   }]);
+}
+
+function parseTikTokMultiLabelOcr_(lines, text) {
+  var entries = collectTikTokTrackingEntries_(lines);
+  if (entries.length < 2) return [];
+
+  var orderIds = uniqueValues_(collectRegexValues_(
+    text,
+    /Order\s*ID\s*:\s*([A-Z0-9-]+)/gi,
+  ));
+  return entries.map(function (entry, index) {
+    var previousIndex = index > 0 ? entries[index - 1].lineIndex : -1;
+    var nextIndex = index + 1 < entries.length ? entries[index + 1].lineIndex : lines.length;
+    var recipient = findTikTokRecipientAfterPostal_(lines, entry, nextIndex);
+    var address = readTikTokAddressBeforeTracking_(lines, entry.lineIndex, previousIndex);
+
+    if (recipient.postalCode && address.indexOf(recipient.postalCode) < 0) {
+      address = (address + " " + recipient.postalCode).trim();
+    }
+    return {
+      marketplace: "TikTok Shop",
+      recipientName: recipient.name,
+      shippingAddress: address.replace(/\s+/g, " ").trim(),
+      orderId: orderIds[index] || "",
+      trackingNumber: entry.value,
+    };
+  });
+}
+
+function collectTikTokTrackingEntries_(lines) {
+  var entries = [];
+  var seen = {};
+  (Array.isArray(lines) ? lines : []).forEach(function (line, lineIndex) {
+    collectRegexValues_(String(line || ""), /\bJTTH[A-Z0-9-]{6,}\b/gi).forEach(function (trackingNumber) {
+      var value = trackingNumber.replace(/-/g, "").toUpperCase();
+      if (seen[value]) return;
+      seen[value] = true;
+      entries.push({ value: value, lineIndex: lineIndex });
+    });
+  });
+  return entries;
+}
+
+function findTikTokRecipientAfterPostal_(lines, entry, endIndex) {
+  var values = Array.isArray(lines) ? lines : [];
+  var trackingPattern = new RegExp("\\b" + entry.value + "\\s+(\\d{5})\\b", "i");
+  for (var index = entry.lineIndex + 1; index < endIndex; index++) {
+    var match = trackingPattern.exec(values[index]);
+    if (match) return readTikTokRecipientAfterPostalIndex_(values, index, endIndex, match[1]);
+  }
+  for (var fallbackIndex = entry.lineIndex + 1; fallbackIndex < endIndex; fallbackIndex++) {
+    if (/^\d{5}$/.test(values[fallbackIndex])) {
+      return readTikTokRecipientAfterPostalIndex_(values, fallbackIndex, endIndex, values[fallbackIndex]);
+    }
+  }
+  return { name: "", postalCode: "" };
+}
+
+function readTikTokRecipientAfterPostalIndex_(lines, postalIndex, endIndex, postalCode) {
+  for (var nextIndex = postalIndex + 1; nextIndex < Math.min(endIndex, postalIndex + 6); nextIndex++) {
+    var candidate = lines[nextIndex];
+    if (/^(?:Shipping Date|Estimated Date|Order\s*ID|In transit by|Product Name|Qty Total|NickName)\b/i.test(candidate)) break;
+    if (
+      !isTikTokNoiseLine_(candidate) &&
+      !/^\(\+?\d{2,3}\)\d|^[A-Z]\d\s+[A-Z]\d|^EZ$/i.test(candidate)
+    ) {
+      return { name: candidate, postalCode: postalCode };
+    }
+  }
+  return { name: "", postalCode: postalCode };
+}
+
+function readTikTokAddressBeforeTracking_(lines, trackingIndex, previousTrackingIndex) {
+  var values = Array.isArray(lines) ? lines : [];
+  var startIndex = Math.max(0, previousTrackingIndex + 1);
+  for (var index = trackingIndex - 1; index >= startIndex; index--) {
+    if (/^V$/i.test(values[index]) || /^Qty Total\b/i.test(values[index])) {
+      startIndex = index + 1;
+      break;
+    }
+  }
+  return values.slice(startIndex, trackingIndex)
+    .filter(function (line) {
+      return !isTikTokNoiseLine_(line) && !/^Qty Total\b|^Order\s*ID\b/i.test(line);
+    })
+    .join(" ")
+    .trim();
+}
+
+function parseTikTokRecipientBeforePostal_(lines) {
+  var values = Array.isArray(lines) ? lines : [];
+  var marker = /^(?:ถึง|เธ–เธถเธ|to)\s*:?\s*(.*)$/i;
+  var boundary = /^(?:shipping date|estimated date|order\s*id|in transit by|product name|qty total|nickname)\b/i;
+
+  for (var index = 0; index < values.length; index++) {
+    var match = marker.exec(values[index]);
+    if (!match) continue;
+
+    var name = String(match[1] || "").trim();
+    var addressParts = [];
+    for (var nextIndex = index + 1; nextIndex < values.length; nextIndex++) {
+      var line = values[nextIndex];
+      if (boundary.test(line)) break;
+      if (/^\d{5}$/.test(line)) {
+        addressParts.push(line);
+        break;
+      }
+      if (isTikTokNoiseLine_(line)) continue;
+      if (!name) {
+        name = line;
+      } else {
+        addressParts.push(line);
+      }
+    }
+
+    if (name) return { name: name, addressParts: addressParts };
+  }
+
+  return { name: "", addressParts: [] };
 }
 
 function isTikTokNoiseLine_(line) {

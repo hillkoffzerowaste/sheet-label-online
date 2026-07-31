@@ -93,6 +93,39 @@ test("preserves the Google Cloud error reason when OCR returns a non-2xx respons
   );
 });
 
+test("uses the regional Vision endpoint for a regional OCR project", async () => {
+  const context = await loadHelpers();
+  const urls = [];
+  context.PropertiesService = {
+    getScriptProperties: () => ({
+      getProperty: (key) => ({
+        GOOGLE_CLOUD_PROJECT_ID: "project-123",
+        GOOGLE_CLOUD_LOCATION: "us",
+      })[key] || null,
+    }),
+  };
+  context.Utilities = { base64Encode: () => "pdf-bytes" };
+  context.ScriptApp = { getOAuthToken: () => "oauth-token" };
+  context.UrlFetchApp = {
+    fetch: (url) => {
+      urls.push(url);
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({ responses: [] }),
+      };
+    },
+  };
+
+  context.extractTextWithVision_({
+    getBlob: () => ({ getBytes: () => [1, 2, 3] }),
+  });
+
+  assert.equal(
+    urls[0],
+    "https://us-vision.googleapis.com/v1/projects/project-123/locations/us/files:annotate",
+  );
+});
+
 test("routes doPost to OCR by default and Gemini only for explicit mode", async () => {
   const context = await loadHelpers();
   const calls = [];
@@ -264,7 +297,108 @@ test("parses TikTok J&T OCR from a file-name marketplace hint", async () => {
   assert.equal(labels[0].status, "ready");
 });
 
-test("keeps a multi-label OCR PDF incomplete when identifier counts do not match", async () => {
+test("parses a TikTok recipient printed after ถึง before the postal code", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "Tik Tok - 2.pdf",
+    [
+      "JTTH201967972485",
+      "จาก",
+      "บริษัท ฮิลล์คอฟฟ์ จำกัด",
+      "ถึง วีระชัย คำสุขดี",
+      "(+66)08******98",
+      "18 หมู่ 7 ต.ทับพริก บ้านคลองหว้า",
+      "อรัญประเทศ, สระแก้ว",
+      "27120",
+      "Shipping Date: 30-07-2026",
+      "Order ID: 585276871493452817",
+    ].join("\n"),
+  );
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].recipientName, "วีระชัย คำสุขดี");
+  assert.match(labels[0].shippingAddress, /18 หมู่ 7/);
+  assert.match(labels[0].shippingAddress, /27120/);
+  assert.doesNotMatch(labels[0].shippingAddress, /วีระชัย|ฮิลล์คอฟฟ์|JTTH/);
+  assert.equal(labels[0].orderId, "585276871493452817");
+  assert.equal(labels[0].trackingNumber, "JTTH201967972485");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("parses every recipient from a multi-label TikTok J&T OCR page", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "Tik Tok - 1.pdf",
+    [
+      "V",
+      "21 Moo 12 Chaloem Phra Kiat, Nakhon Ratchasima 30230",
+      "JTTH201061537596",
+      "From Hillkoff ถึง",
+      "(+66)09******99",
+      "Order ID: 585283162771720012 Estimated Date:",
+      "JTTH201061537596 30230",
+      "Rattana",
+      "Shipping Date: 31-07-2026",
+      "Qty Total: 1 Order ID: 585283162771720012",
+      "V",
+      "August Condo 41 Charoenkrung 80, Bangkok 10120",
+      "JTTH201622437590",
+      "From Hillkoff ถึง",
+      "(+66)93*****34",
+      "Order ID: 585284651433821511 Estimated Date:",
+      "JTTH201622437590 10120",
+      "Pailin",
+      "Shipping Date: 31-07-2026",
+      "Qty Total: 1 Order ID: 585284651433821511",
+    ].join("\n"),
+  );
+
+  assert.equal(labels.length, 2);
+  assert.equal(JSON.stringify(labels.map((label) => label.recipientName)), JSON.stringify(["Rattana", "Pailin"]));
+  assert.equal(JSON.stringify(labels.map((label) => label.shippingAddress)), JSON.stringify([
+    "21 Moo 12 Chaloem Phra Kiat, Nakhon Ratchasima 30230",
+    "August Condo 41 Charoenkrung 80, Bangkok 10120",
+  ]));
+  assert.equal(JSON.stringify(labels.map((label) => label.orderId)), JSON.stringify([
+    "585283162771720012",
+    "585284651433821511",
+  ]));
+  assert.equal(JSON.stringify(labels.map((label) => label.trackingNumber)), JSON.stringify([
+    "JTTH201061537596",
+    "JTTH201622437590",
+  ]));
+  assert.equal(labels.every((label) => label.status === "ready"), true);
+});
+
+test("prefers the TikTok tracking-and-postal marker over an earlier postal code", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "Tik Tok - 1.pdf",
+    [
+      "JTTH201061537596",
+      "30230",
+      "(+66)09******99",
+      "JTTH201061537596 30230",
+      "Rattana",
+      "Shipping Date: 31-07-2026",
+      "Order ID: 585283162771720012",
+      "JTTH201622437590",
+      "10120",
+      "(+66)93*****34",
+      "JTTH201622437590 10120",
+      "Pailin",
+      "Shipping Date: 31-07-2026",
+      "Order ID: 585284651433821511",
+    ].join("\n"),
+  );
+
+  assert.equal(labels.length, 2);
+  assert.equal(labels[0].recipientName, "Rattana");
+  assert.equal(labels[1].recipientName, "Pailin");
+  assert.equal(labels.some((label) => /^\(\+66\)/.test(label.recipientName)), false);
+});
+
+test("keeps only incomplete multi-label TikTok OCR results in review", async () => {
   const context = await loadHelpers();
   const labels = context.buildOcrShippingLabels_(
     "Tik Tok - 2.pdf",
@@ -280,7 +414,9 @@ test("keeps a multi-label OCR PDF incomplete when identifier counts do not match
   );
 
   assert.equal(labels.length, 2);
-  assert.equal(labels.some((label) => label.reviewReasons.includes("labelCount")), true);
+  assert.equal(labels[0].status, "ready");
+  assert.equal(labels[1].status, "review");
+  assert.equal(labels[1].reviewReasons.includes("recipientName"), true);
 });
 
 test("accepts OCR text without marketplace branding when the PDF filename identifies TikTok", async () => {
@@ -328,6 +464,48 @@ test("uses the barcode reader before Vision OCR and Document AI", async () => {
   assert.equal(result.labels[0].status, "ready");
   assert.equal(visionCalls, 0);
   assert.equal(documentAiCalls, 0);
+});
+
+test("uses a complete OCR reader result without concatenating multi-label layouts", async () => {
+  const context = await loadHelpers();
+  const file = {
+    getName: () => "Tik Tok - 1.pdf",
+    getUrl: () => "https://drive/tiktok",
+  };
+  const driveText = [
+    "JTTH201061537596",
+    "Order ID: 585283162771720012",
+  ].join("\n");
+  const visionText = [
+    "V",
+    "21 Moo 12 Chaloem Phra Kiat 30230",
+    "JTTH201061537596",
+    "JTTH201061537596 30230",
+    "Rattana",
+    "Shipping Date: 31-07-2026",
+    "Order ID: 585283162771720012",
+    "V",
+    "August Condo Bangkok 10120",
+    "JTTH201622437590",
+    "JTTH201622437590 10120",
+    "Pailin",
+    "Shipping Date: 31-07-2026",
+    "Order ID: 585284651433821511",
+  ].join("\n");
+  const labels = context.buildOcrShippingLabels_(file.getName(), file.getUrl(), driveText);
+
+  context.extractBarcodesWithVision_ = () => ({ text: "", barcodes: [] });
+  context.extractTextWithVision_ = () => ({ text: visionText, barcodes: [] });
+  context.extractTextWithDocumentAi_ = () => ({ text: "", barcodes: [] });
+
+  const result = context.enrichOcrWithCloudReaders_(file, driveText, labels);
+
+  assert.equal(result.used, true);
+  assert.equal(result.text, visionText);
+  assert.equal(result.labels.length, 2);
+  assert.equal(result.labels.every((label) => label.status === "ready"), true);
+  assert.equal(result.labels[0].recipientName, "Rattana");
+  assert.equal(result.labels[1].recipientName, "Pailin");
 });
 
 test("reads Document AI text and detected barcode values", async () => {
