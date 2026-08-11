@@ -252,18 +252,20 @@ function setupPdfProcessingTrigger() {
 
 function processDriveFile(fileId, requestId) {
   const file = DriveApp.getFileById(fileId);
+  var ocrFile = file;
 
   var ocrText = null;
   var ocrFetched = false;
   var getOcrText_ = function () {
     if (!ocrFetched) {
-      ocrText = extractTextWithDriveOcr_(file);
+      ocrText = extractTextWithDriveOcr_(ocrFile);
       ocrFetched = true;
     }
     return ocrText;
   };
 
   try {
+    ocrFile = prepareOcrInputFile_(file);
     var ocrTextAvailable = false;
     var ocrFailure = null;
     try {
@@ -280,7 +282,7 @@ function processDriveFile(fileId, requestId) {
     var ocrLabels = readableOcrText
       ? buildOcrShippingLabels_(file.getName(), file.getUrl(), readableOcrText)
       : [];
-    var fallbackResult = enrichOcrWithCloudReaders_(file, readableOcrText, ocrLabels);
+    var fallbackResult = enrichOcrWithCloudReaders_(ocrFile, readableOcrText, ocrLabels);
     readableOcrText = fallbackResult.text;
     ocrLabels = fallbackResult.labels;
 
@@ -995,6 +997,65 @@ function isGeminiQuotaProcessingError_(error) {
       (error.name === "GeminiQuotaError" ||
         isGeminiQuotaError_(error.status, error.message)),
   );
+}
+
+function getOcrPreprocessorUrl_() {
+  return getOptionalScriptProperty_("OCR_PREPROCESSOR_URL");
+}
+
+function getOcrPreprocessorToken_() {
+  return getOptionalScriptProperty_("OCR_PREPROCESSOR_TOKEN");
+}
+
+function prepareOcrInputFile_(file) {
+  if (!getOcrPreprocessorUrl_()) return file;
+  return preprocessPdfForOcr_(file);
+}
+
+function preprocessPdfForOcr_(file) {
+  var url = getOcrPreprocessorUrl_();
+  if (!url) return file;
+  if (typeof UrlFetchApp === "undefined") {
+    throw createProcessingError_(
+      "OcrPreprocessorError",
+      "OCR preprocessor ต้องใช้ UrlFetchApp",
+      true,
+    );
+  }
+
+  var headers = {};
+  var token = getOcrPreprocessorToken_();
+  if (token) headers.Authorization = "Bearer " + token;
+
+  var response = UrlFetchApp.fetch(url.replace(/\/$/, "") + "/preprocess", {
+    method: "post",
+    contentType: "application/pdf",
+    payload: file.getBlob().getBytes(),
+    headers: headers,
+    muteHttpExceptions: true,
+  });
+  var status = response.getResponseCode();
+  if (status < 200 || status >= 300) {
+    throw createProcessingError_(
+      "OcrPreprocessorError",
+      "OCR preprocessor ตอบกลับ HTTP " + status,
+      true,
+    );
+  }
+
+  var processedBlob = response.getBlob();
+  if (processedBlob && typeof processedBlob.setName === "function") {
+    processedBlob.setName(file.getName().replace(/\.pdf$/i, "") + ".preprocessed.pdf");
+  }
+  return {
+    getId: function () { return file.getId() + "-preprocessed"; },
+    getName: function () {
+      return file.getName().replace(/\.pdf$/i, "") + ".preprocessed.pdf";
+    },
+    getUrl: function () { return file.getUrl(); },
+    getBlob: function () { return processedBlob; },
+    getMimeType: function () { return MimeType.PDF; },
+  };
 }
 
 function extractTextWithDriveOcr_(file) {

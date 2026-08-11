@@ -31,6 +31,17 @@ npx next build
 
 ## Automatic PDF processing
 
+### Optional Cloud Run image preprocessing
+
+The OCR path can call `services/ocr-preprocessor` before reading the PDF. Set these Apps Script Script Properties after deploying the service:
+
+```text
+OCR_PREPROCESSOR_URL=https://your-cloud-run-service-url
+OCR_PREPROCESSOR_TOKEN=your-private-bearer-token
+```
+
+The preprocessor auto-rotates pages when orientation is detectable, trims blank margins, separates wide pages only when a clear content gap is found, enlarges the image, and applies grayscale, contrast, denoise, and sharpening. If `OCR_PREPROCESSOR_URL` is empty, the existing OCR path is used.
+
 Current policy: every non-retryable PDF is exported to the dated Google Sheet and moved to `Processed`. OCR and explicit Gemini runs never move a file to `Review`. If a field cannot be read, the corresponding cell remains blank for manual correction. Retryable service failures (for example OCR transport errors or Gemini quota limits) stay in the source folder so they can be retried.
 
 The scheduled OCR trigger reads the main input folder. The separate Gemini option also reads the main input folder directly; it is never a Review-folder workflow.

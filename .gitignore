@@ -41,3 +41,7 @@ next-env.d.ts
 /outputs/
 /work/
 /tmp/
+
+# Python Cloud Run service
+__pycache__/
+*.pyc
