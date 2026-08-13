@@ -587,8 +587,8 @@ function prepareShippingLabelsForExport_(fileName, values) {
       shippingAddress: "",
       orderId: "",
       trackingNumber: "",
-      status: "ready",
-      reviewReasons: [],
+      status: "incomplete",
+      reviewReasons: ["marketplace", "recipientName", "shippingAddress", "orderId", "trackingNumber"],
     },
   ];
 }
@@ -1796,36 +1796,96 @@ function appendFailedRow(order) {
 function normalizeShippingLabels_(fileName, values) {
   const labels = (Array.isArray(values) ? values : []).map(function (value, index) {
     const marketplace = normalizeMarketplace_(value && value.marketplace);
-    const label = {
+    return {
       id: fileName + "-" + (index + 1),
       sourceFileName: fileName,
       marketplace,
-      recipientName: stringValue_(value && value.recipientName),
-      shippingAddress: stringValue_(value && value.shippingAddress),
+      recipientName: cleanShippingRecipientName_(
+        marketplace,
+        stringValue_(value && value.recipientName),
+      ),
+      shippingAddress: cleanShippingAddress_(
+        stringValue_(value && value.shippingAddress),
+      ),
       orderId: stringValue_(value && value.orderId),
       trackingNumber: stringValue_(value && value.trackingNumber),
-      status: "ready",
+      status: "incomplete",
       reviewReasons: [],
     };
-    label.reviewReasons = [];
-    label.status = "ready";
-    return label;
   });
 
-  const duplicateOrderIds = duplicateShippingLabelValues_(labels, "orderId");
-  const duplicateTrackingNumbers = duplicateShippingLabelValues_(labels, "trackingNumber");
-
-  return labels.map(function (label) {
-    if (duplicateOrderIds.indexOf(label.orderId) >= 0) {
-      label.reviewReasons.push("duplicateOrderId");
-    }
-    if (duplicateTrackingNumbers.indexOf(label.trackingNumber) >= 0) {
-      label.reviewReasons.push("duplicateTrackingNumber");
-    }
-    label.reviewReasons = [];
-    label.status = "ready";
+  return dedupeShippingLabels_(labels).map(function (label) {
+    label.reviewReasons = getShippingLabelReviewReasons_(label);
+    label.status = label.reviewReasons.length ? "incomplete" : "ready";
     return label;
   });
+}
+
+function dedupeShippingLabels_(labels) {
+  var keptByTracking = {};
+  var output = [];
+  (Array.isArray(labels) ? labels : []).forEach(function (label) {
+    var tracking = stringValue_(label && label.trackingNumber).toUpperCase();
+    if (!tracking) {
+      output.push(label);
+      return;
+    }
+
+    var existingIndex = keptByTracking[tracking];
+    if (existingIndex === undefined) {
+      keptByTracking[tracking] = output.length;
+      output.push(label);
+      return;
+    }
+
+    if (shippingLabelCompletenessScore_(label) > shippingLabelCompletenessScore_(output[existingIndex])) {
+      output[existingIndex] = label;
+    }
+  });
+  return output;
+}
+
+function shippingLabelCompletenessScore_(label) {
+  if (!label) return 0;
+  return [
+    label.marketplace && label.marketplace !== "Unknown",
+    label.recipientName,
+    label.shippingAddress,
+    label.orderId,
+    label.trackingNumber,
+  ].filter(Boolean).length;
+}
+
+function cleanShippingRecipientName_(marketplace, value) {
+  var name = stringValue_(value);
+  if (marketplace === "TikTok Shop" && !isLikelyTikTokRecipientName_(name)) return "";
+  return name;
+}
+
+function cleanShippingAddress_(value) {
+  var address = stringValue_(value)
+    .replace(/\s+(?:Shopee\s+Order\s+No\.?|Order\s*ID|Product\s*Name|ชื่อสินค้า|ตัวเลือกสินค้า|In\s+transit\s+by|Qty\s*Total|NickName)\b[\s\S]*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  var postalMatch = /^(.*?\b\d{5}\b)(?:\s+.*)?$/.exec(address);
+  if (postalMatch && /(?:\bHOME\b|#[\s]*ชื่อสินค้า|[A-Z]\d+[\s_-])/i.test(address.slice(postalMatch[1].length))) {
+    address = postalMatch[1].trim();
+  }
+  return isLikelyShippingAddress_(address) ? address : "";
+}
+
+function isLikelyShippingAddress_(value) {
+  var address = stringValue_(value);
+  if (address.length < 8) return false;
+  if (/\b(?:Shopee\s+Order\s+No\.?|Order\s*ID|Product\s*Name|ชื่อสินค้า|ตัวเลือกสินค้า|In\s+transit\s+by|Qty\s*Total|NickName)\b/i.test(address)) {
+    return false;
+  }
+  if (/\bHOME\b/i.test(address)) return false;
+  if (/^[A-Z0-9]+(?:[ _-]+[A-Z0-9.]+){2,}$/i.test(address) && !/[a-z\u0E00-\u0E7F]/.test(address)) {
+    return false;
+  }
+  return /\b\d{5}\b/.test(address) ||
+    /(?:บ้านเลขที่|เลขที่|หมู่|ม\.|ตำบล|ต\.|อำเภอ|อ\.|จังหวัด|จ\.|แขวง|เขต|ถนน|ซอย|road|street|district|bangkok|chiang|phuket|udon|thani)/i.test(address);
 }
 
 function getShippingLabelReviewReasons_(label) {
@@ -1837,7 +1897,7 @@ function getShippingLabelReviewReasons_(label) {
   ) {
     reasons.push("recipientName");
   }
-  if (!label.shippingAddress) reasons.push("shippingAddress");
+  if (!isLikelyShippingAddress_(label.shippingAddress)) reasons.push("shippingAddress");
   if (!label.orderId) reasons.push("orderId");
   if (!label.trackingNumber) reasons.push("trackingNumber");
   return reasons;
@@ -1850,7 +1910,8 @@ function isLikelyTikTokRecipientName_(value) {
   if (/^\(\+?\d{2,3}\)\d|^\+?\d{8,}/.test(name)) return false;
   if (/^JTTH[A-Z0-9-]{6,}\b/i.test(name)) return false;
   if (/^[A-Z]?\d{2,4}[A-Z]?$/i.test(name)) return false;
-  if (/^(?:nickname|order\s*id|shipping date|estimated date|in transit by)\b/i.test(name)) return false;
+  if (/^(?:จาก|from)(?:\s|$)/i.test(name)) return false;
+  if (/^(?:nickname|order\s*id|shipping date|estimated date|in transit by|product name|qty total)\b/i.test(name)) return false;
   return true;
 }
 
@@ -1949,8 +2010,8 @@ function filterNewShippingLabels_(labels, existingRows, fileUrl) {
     const rowSource = fileUrl ? stringValue_(row[9]) : stringValue_(row[1]);
     existingKeys[
       shippingLabelRowKey_(rowSource, row[5], row[6], row[3], row[4])
-    ] = stringValue_(row[7]) === "ready";
-    if (fileUrl && rowSource === fileUrl && stringValue_(row[7]) === "ready") {
+    ] = true;
+    if (fileUrl && rowSource === fileUrl) {
       if (stringValue_(row[5])) importedIdentifiers["order:" + stringValue_(row[5])] = true;
       if (stringValue_(row[6])) importedIdentifiers["tracking:" + stringValue_(row[6])] = true;
     }
@@ -2242,8 +2303,8 @@ function ensureOcrLabelCompleteness_(fileName, text, labels) {
       shippingAddress: "",
       orderId: "",
       trackingNumber: "",
-      status: "ready",
-      reviewReasons: [],
+      status: "incomplete",
+      reviewReasons: ["marketplace", "recipientName", "shippingAddress", "orderId", "trackingNumber"],
     });
   }
   return candidates;
@@ -2718,7 +2779,8 @@ function parseShopeeAddressBeforeTracking_(text, trackingIndex) {
   }
 
   if (routeHeaderIndex < 0 || routeStopIndex <= routeHeaderIndex + 1) return "";
-  return lines.slice(routeHeaderIndex + 1, routeStopIndex).join(" ").trim();
+  var address = lines.slice(routeHeaderIndex + 1, routeStopIndex).join(" ").trim();
+  return isLikelyShippingAddress_(address) ? address : "";
 }
 
 function collectRegexValues_(text, pattern) {

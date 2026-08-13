@@ -177,7 +177,7 @@ test("marks an OCR order with drive-ocr source and review when fields are missin
   assert.ok(order.missingFields.includes("orderId"));
 });
 
-test("returns an OCR shipping-label candidate instead of guessing missing values", async () => {
+test("returns an incomplete OCR shipping-label candidate instead of guessing missing values", async () => {
   const context = await loadHelpers();
   const labels = context.buildOcrShippingLabels_(
     "fallback.pdf",
@@ -187,10 +187,10 @@ test("returns an OCR shipping-label candidate instead of guessing missing values
 
   assert.equal(labels.length, 1);
   assert.equal(labels[0].source, "drive-ocr");
-  assert.equal(labels[0].status, "ready");
+  assert.equal(labels[0].status, "incomplete");
 });
 
-test("exports incomplete OCR labels as ready rows with blank fields", async () => {
+test("exports incomplete OCR labels with blanks and a clear incomplete status", async () => {
   const context = await loadHelpers();
   const labels = context.normalizeShippingLabels_("incomplete.pdf", [
     {
@@ -203,10 +203,10 @@ test("exports incomplete OCR labels as ready rows with blank fields", async () =
   ]);
 
   assert.equal(labels.length, 1);
-  assert.equal(labels[0].status, "ready");
+  assert.equal(labels[0].status, "incomplete");
   assert.equal(labels[0].recipientName, "");
   assert.equal(labels[0].orderId, "");
-  assert.equal(labels[0].reviewReasons.length, 0);
+  assert.deepEqual(Array.from(labels[0].reviewReasons), ["recipientName", "orderId"]);
 });
 
 test("parses OCR order fields for Shopee, Lazada, and TikTok Shop", async () => {
@@ -433,13 +433,13 @@ test("exports incomplete multi-label TikTok OCR results with blanks", async () =
   );
 
   assert.equal(labels.length, 2);
-  assert.equal(labels[0].status, "ready");
-  assert.equal(labels[1].status, "ready");
+  assert.equal(labels[0].status, "incomplete");
+  assert.equal(labels[1].status, "incomplete");
   assert.equal(labels[1].recipientName, "");
-  assert.equal(labels[1].reviewReasons.length, 0);
+  assert.ok(labels[1].reviewReasons.includes("recipientName"));
 });
 
-test("rejects punctuation, phone numbers, and route codes as TikTok recipient names", async () => {
+test("clears punctuation, phone numbers, and route codes from TikTok recipient names", async () => {
   const context = await loadHelpers();
   const labels = context.normalizeShippingLabels_("Tik Tok - 1.pdf", [
     {
@@ -472,8 +472,9 @@ test("rejects punctuation, phone numbers, and route codes as TikTok recipient na
     },
   ]);
 
-  assert.equal(labels.every((label) => label.status === "ready"), true);
-  assert.equal(labels.every((label) => label.reviewReasons.length === 0), true);
+  assert.equal(labels.every((label) => label.status === "incomplete"), true);
+  assert.equal(labels.every((label) => label.recipientName === ""), true);
+  assert.equal(labels.every((label) => label.reviewReasons.includes("recipientName")), true);
 });
 
 test("accepts OCR text without marketplace branding when the PDF filename identifies TikTok", async () => {
@@ -1414,7 +1415,7 @@ test("exports shipping labels even when order extraction fails", async () => {
   assert.equal(movedToProcessed, true);
 });
 
-test("writes an exportable blank shipping row when label extraction is malformed", async () => {
+test("writes an incomplete blank shipping row when label extraction is malformed", async () => {
   const context = await loadHelpers();
   const file = {
     getName: () => "malformed.pdf",
@@ -1440,18 +1441,18 @@ test("writes an exportable blank shipping row when label extraction is malformed
 
   assert.equal(result.status, "failed");
   assert.equal(exportedLabels.length, 1);
-  assert.equal(exportedLabels[0].status, "ready");
+  assert.equal(exportedLabels[0].status, "incomplete");
   assert.equal(exportedLabels[0].sourceFileName, "malformed.pdf");
 });
 
-test("creates an exportable blank row when Gemini returns no shipping labels", async () => {
+test("creates an incomplete blank row when Gemini returns no shipping labels", async () => {
   const context = await loadHelpers();
   const labels = context.prepareShippingLabelsForExport_("empty.pdf", []);
 
   assert.equal(labels.length, 1);
   assert.equal(labels[0].marketplace, "Unknown");
-  assert.equal(labels[0].status, "ready");
-  assert.equal(labels[0].reviewReasons.length, 0);
+  assert.equal(labels[0].status, "incomplete");
+  assert.ok(labels[0].reviewReasons.includes("recipientName"));
 });
 
 test("classifies unparseable Gemini body during label extraction as retryable transport error", async () => {
@@ -1599,6 +1600,37 @@ test("skips an already imported label when OCR text changes but file and identif
   assert.equal(newLabels.length, 0);
 });
 
+test("does not reinsert an incomplete label when its file and tracking number already exist", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("fixture.pdf", [{
+    marketplace: "Shopee",
+    recipientName: "",
+    shippingAddress: "",
+    orderId: "2608138N3AJJB0",
+    trackingNumber: "TH260525610831P",
+  }]);
+  const existingRows = [[
+    new Date(),
+    "fixture.pdf",
+    "Shopee",
+    "",
+    "",
+    "2608138N3AJJB0",
+    "TH260525610831P",
+    "incomplete",
+    "recipientName, shippingAddress",
+    "https://drive.google.com/file/d/fixture/view",
+  ]];
+
+  const newLabels = context.filterNewShippingLabels_(
+    labels,
+    existingRows,
+    "https://drive.google.com/file/d/fixture/view",
+  );
+
+  assert.equal(newLabels.length, 0);
+});
+
 test("removes stale empty review placeholders when a file later reads successfully", async () => {
   const context = await loadHelpers();
   const deletedRows = [];
@@ -1635,4 +1667,81 @@ test("removes stale empty review placeholders when a file later reads successful
   context.removeStaleReviewPlaceholders_(sheet, existingRows, { "22.pdf": true });
 
   assert.deepEqual(deletedRows, [2]);
+});
+
+test("marks blank shipping-label fields as incomplete without routing them to review", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("incomplete.pdf", [{
+    marketplace: "Shopee",
+    recipientName: "",
+    shippingAddress: "",
+    orderId: "2608138N3AJJB0",
+    trackingNumber: "TH260525610831P",
+  }]);
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].status, "incomplete");
+  assert.deepEqual(Array.from(labels[0].reviewReasons), ["recipientName", "shippingAddress"]);
+});
+
+test("clears Shopee warehouse routing codes instead of exporting them as addresses", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("shopee.pdf", [{
+    marketplace: "Shopee",
+    recipientName: "ปาลิตา วงทมนา",
+    shippingAddress: "W 0 C13 207 HSAKN-B",
+    orderId: "2608138GD25XW0",
+    trackingNumber: "TH266686087147V",
+  }]);
+
+  assert.equal(labels[0].shippingAddress, "");
+  assert.equal(labels[0].status, "incomplete");
+  assert.ok(labels[0].reviewReasons.includes("shippingAddress"));
+});
+
+test("trims Shopee order and warehouse text that follows a valid postal code", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("shopee.pdf", [{
+    marketplace: "Shopee",
+    recipientName: "อัญรินทร์ ขนุนทอง",
+    shippingAddress: "บ้านเลขที่ 91/1 ม.7 ตำบลบางโทรัด จังหวัดสมุทรสาคร 74000 Shopee Order No. 2608138GAG45FP 13-08-2026",
+    orderId: "2608138GAG45FP",
+    trackingNumber: "TH2659183081979",
+  }, {
+    marketplace: "Shopee",
+    recipientName: "สหภาพ เนื่องแก้ว",
+    shippingAddress: "บ้านเลขที่198 หมู่13 ต.บ้านเป็ด จังหวัดขอนแก่น 40000 HOME H24-(HOU.8) 198",
+    orderId: "2608138FH4K8J1",
+    trackingNumber: "TH261636476871S",
+  }]);
+
+  assert.equal(labels[0].shippingAddress, "บ้านเลขที่ 91/1 ม.7 ตำบลบางโทรัด จังหวัดสมุทรสาคร 74000");
+  assert.equal(labels[1].shippingAddress, "บ้านเลขที่198 หมู่13 ต.บ้านเป็ด จังหวัดขอนแก่น 40000");
+  assert.equal(labels.every((label) => label.status === "ready"), true);
+});
+
+test("keeps one best label when OCR returns the same tracking number twice", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("Tik Tok - 1.pdf", [
+    {
+      marketplace: "TikTok Shop",
+      recipientName: "จาก H ** f",
+      shippingAddress: "ถ . ช้างเผือก ต . ศรีภูมิ อ . เมือง จ . เชียงใหม่ 50200",
+      orderId: "585523355876427426",
+      trackingNumber: "JTTH202373114484",
+    },
+    {
+      marketplace: "TikTok Shop",
+      recipientName: "",
+      shippingAddress: "",
+      orderId: "585523355876427426",
+      trackingNumber: "JTTH202373114484",
+    },
+  ]);
+
+  assert.equal(labels.length, 1);
+  assert.equal(labels[0].trackingNumber, "JTTH202373114484");
+  assert.equal(labels[0].recipientName, "");
+  assert.equal(labels[0].shippingAddress.includes("เชียงใหม่ 50200"), true);
+  assert.equal(labels[0].status, "incomplete");
 });
