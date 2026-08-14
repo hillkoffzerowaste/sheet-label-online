@@ -1600,6 +1600,37 @@ test("skips an already imported label when OCR text changes but file and identif
   assert.equal(newLabels.length, 0);
 });
 
+test("skips an already imported label from a different Drive file", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("Tik Tok - 2 copy.pdf", [{
+    marketplace: "TikTok Shop",
+    recipientName: "บินพร ริมวงษ์",
+    shippingAddress: "35/1 ม.3 ต.จริม อ.ท่าปลา อุตรดิตถ์ 53150",
+    orderId: "585534994072700167",
+    trackingNumber: "JTTH202651056580",
+  }]);
+  const existingRows = [[
+    new Date(),
+    "Tik Tok - 2(1).preprocessed.pdf",
+    "TikTok Shop",
+    "",
+    "ถ.ช้างเผือก ต.ศรีภูมิ อ.เมืองเชียงใหม่ จ.เชียงใหม่ 50200",
+    "585534994072700167",
+    "JTTH202651056580",
+    "incomplete",
+    "recipientName",
+    "https://drive.google.com/file/d/previous-file/view",
+  ]];
+
+  const newLabels = context.filterNewShippingLabels_(
+    labels,
+    existingRows,
+    "https://drive.google.com/file/d/copied-file/view",
+  );
+
+  assert.equal(newLabels.length, 0);
+});
+
 test("does not reinsert an incomplete label when its file and tracking number already exist", async () => {
   const context = await loadHelpers();
   const labels = context.normalizeShippingLabels_("fixture.pdf", [{

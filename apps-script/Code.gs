@@ -2034,14 +2034,12 @@ function filterNewShippingLabels_(labels, existingRows, fileUrl) {
     existingKeys[
       shippingLabelRowKey_(rowSource, row[5], row[6], row[3], row[4])
     ] = true;
-    if (fileUrl && rowSource === fileUrl) {
-      if (stringValue_(row[5])) importedIdentifiers["order:" + stringValue_(row[5])] = true;
-      if (stringValue_(row[6])) importedIdentifiers["tracking:" + stringValue_(row[6])] = true;
-    }
+    if (stringValue_(row[5])) importedIdentifiers["order:" + stringValue_(row[5])] = true;
+    if (stringValue_(row[6])) importedIdentifiers["tracking:" + stringValue_(row[6])] = true;
   });
 
   return (labels || []).filter(function (label) {
-    if (fileUrl && label) {
+    if (label) {
       if (
         (label.orderId && importedIdentifiers["order:" + stringValue_(label.orderId)]) ||
         (label.trackingNumber && importedIdentifiers["tracking:" + stringValue_(label.trackingNumber)])
