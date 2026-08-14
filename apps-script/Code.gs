@@ -2666,7 +2666,7 @@ function readTikTokAddressBeforeTracking_(lines, trackingIndex, previousTracking
 
 function parseTikTokRecipientBeforePostal_(lines) {
   var values = Array.isArray(lines) ? lines : [];
-  var marker = /^(?:ถึง|เธ–เธถเธ|to)\s*:?\s*(.*)$/i;
+  var marker = /^(?:ถึง|ถง|ถึ?ง|เถิง|เธ–เธถเธ|to)\s*:?\s*(.*)$/i;
   var boundary = /^(?:shipping date|estimated date|order\s*id|in transit by|product name|qty total|nickname)\b/i;
 
   for (var index = 0; index < values.length; index++) {

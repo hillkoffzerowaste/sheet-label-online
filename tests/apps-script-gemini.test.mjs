@@ -1834,3 +1834,44 @@ test("does not export a TikTok sender address when its recipient is missing", as
   assert.equal(labels[0].shippingAddress, "");
   assert.equal(labels[0].orderId, "585534994072700167");
 });
+
+test("reads a single TikTok label when Vision OCR misreads ถึง as ถง", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseTikTokOcrShippingLabels_(
+    "Tik Tok - 2(1).preprocessed.pdf",
+    [
+      "JTTH202651056580",
+      "จาก",
+      "H**",
+      "ถ.ช้างเผือก ต.ศรีภูมิ อ.เมืองเชียงใหม่ จ.เชียงใหม่ 50200",
+      "ถง",
+      "บินพร ริมวงษ์",
+      "(+66)08*****05",
+      "35/1 ม.3 ต.จริม อ.ท่าปลา อุตรดิตถ์",
+      "53150",
+      "Order ID: 585534994072700167",
+    ].join("\n"),
+  );
+
+  assert.equal(labels[0].recipientName, "บินพร ริมวงษ์");
+  assert.match(labels[0].shippingAddress, /35\/1 ม\.3/);
+  assert.doesNotMatch(labels[0].shippingAddress, /ช้างเผือก/);
+  assert.equal(labels[0].status, "ready");
+});
+
+test("does not export the sender address for a single TikTok label without a recipient", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseTikTokOcrShippingLabels_(
+    "Tik Tok - 2(1).preprocessed.pdf",
+    [
+      "JTTH202651056580",
+      "จาก",
+      "ถ.ช้างเผือก ต.ศรีภูมิ อ.เมืองเชียงใหม่ จ.เชียงใหม่ 50200",
+      "Order ID: 585534994072700167",
+    ].join("\n"),
+  );
+
+  assert.equal(labels[0].recipientName, "");
+  assert.equal(labels[0].shippingAddress, "");
+  assert.equal(labels[0].status, "incomplete");
+});
