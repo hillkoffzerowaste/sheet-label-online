@@ -1788,3 +1788,49 @@ test("marks Shopee delivery instructions in the recipient field as incomplete", 
   assert.equal(labels[0].status, "incomplete");
   assert.ok(labels[0].reviewReasons.includes("recipientName"));
 });
+
+test("reads a TikTok recipient from a Vision marker with an OCR spelling variation", async () => {
+  const context = await loadHelpers();
+  const item = (text, x, y) => ({ text, x, y, height: 0.02, normalized: true });
+  const labels = context.parseTikTokVisionLayoutColumns_("Tik Tok - 2.pdf", [{
+    items: [
+      item("JTTH202651056580", 0.04, 0.12),
+      item("ถง", 0.04, 0.34),
+      item("บินพร", 0.12, 0.34),
+      item("ริมวงษ์", 0.24, 0.34),
+      item("K1", 0.70, 0.34),
+      item("N42-41", 0.80, 0.34),
+      item("(+66)08*****05", 0.12, 0.39),
+      item("35/1", 0.04, 0.45),
+      item("ม.3", 0.12, 0.45),
+      item("ต.จริม", 0.20, 0.45),
+      item("อ.ท่าปลา", 0.04, 0.49),
+      item("อุตรดิตถ์", 0.16, 0.49),
+      item("53150", 0.04, 0.53),
+      item("585534994072700167", 0.10, 0.72),
+    ],
+    text: "unused",
+  }]);
+
+  assert.equal(labels[0].recipientName, "บินพร ริมวงษ์");
+  assert.match(labels[0].shippingAddress, /35\/1 ม\.3/);
+  assert.match(labels[0].shippingAddress, /53150/);
+  assert.equal(labels[0].status, "ready");
+});
+
+test("does not export a TikTok sender address when its recipient is missing", async () => {
+  const context = await loadHelpers();
+  const lines = [
+    "จาก",
+    "ถ.ช้างเผือก ต.ศรีภูมิ อ.เมืองเชียงใหม่ จ.เชียงใหม่ 50200",
+    "JTTH202651056580",
+    "Order ID: 585534994072700167",
+    "JTTH202797952383",
+    "Order ID: 585527725498926533",
+  ];
+  const labels = context.parseTikTokMultiLabelOcr_(lines, lines.join("\n"));
+
+  assert.equal(labels[0].recipientName, "");
+  assert.equal(labels[0].shippingAddress, "");
+  assert.equal(labels[0].orderId, "585534994072700167");
+});

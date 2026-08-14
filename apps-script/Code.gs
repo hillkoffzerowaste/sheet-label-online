@@ -1554,7 +1554,8 @@ function extractTikTokVisionAddress_(items) {
 
 function findTikTokVisionPhone_(items) {
   return (items || []).filter(function (item) {
-    return /^\+?66$/.test(String(item.text || "").replace(/\s/g, ""));
+    var value = String(item.text || "").replace(/\s/g, "");
+    return /^\+?66$/.test(value) || /^\(?\+?66\)?\d{1,}/.test(value);
   }).sort(function (left, right) { return left.y - right.y; })[0] || null;
 }
 
@@ -1592,9 +1593,8 @@ function extractTikTokVisionRecipientNearPhone_(items) {
 
 function extractTikTokVisionRecipientByPosition_(items) {
   var values = Array.isArray(items) ? items : [];
-  var markerText = String.fromCharCode(0x0e16, 0x0e36, 0x0e07);
   var marker = values.filter(function (item) {
-    return String(item.text || "").trim() === markerText;
+    return isTikTokVisionRecipientMarker_(item.text);
   })[0];
   if (!marker) return "";
   var phone = findTikTokVisionPhone_(values);
@@ -1604,9 +1604,20 @@ function extractTikTokVisionRecipientByPosition_(items) {
       (!phone || item.y < phone.y - 0.01) &&
       !/^JTTH[A-Z0-9-]{6,}$/i.test(text) &&
       !/^(?:PICK|UP|COD|Order|ID|Shipping|Date)$/i.test(text) &&
-      !/^[A-Z]?\d{2,4}[A-Z]?(?:-\d+)?$/i.test(text);
+      !/^[A-Z]\d{1,2}$/i.test(text) &&
+      !/^[A-Z]?\d{2,4}[A-Z]?(?:-\d+)?$/i.test(text) &&
+      !isTikTokVisionRouteCode_(text);
   });
   return joinVisionLayoutItems_(candidates).replace(/\n/g, " ").trim();
+}
+
+function isTikTokVisionRecipientMarker_(value) {
+  var text = normalizePdfTextForParsing_(String(value || "")).replace(/\s+/g, "").trim();
+  return /^(?:ถึง|ถง|ถึ?ง|เถิง|to)\s*:?$/i.test(text);
+}
+
+function isTikTokVisionRouteCode_(value) {
+  return /^[A-Z]{1,2}\d{0,2}(?:\s+[A-Z]?\d{1,3}(?:-\d+)?)+$/i.test(String(value || "").trim());
 }
 
 function collectVisionBarcodeValues_(response) {
@@ -2575,6 +2586,10 @@ function parseTikTokMultiLabelOcr_(lines, text) {
     var nextIndex = index + 1 < entries.length ? entries[index + 1].lineIndex : lines.length;
     var recipient = findTikTokRecipientAfterPostal_(lines, entry, nextIndex);
     var address = readTikTokAddressBeforeTracking_(lines, entry.lineIndex, previousIndex);
+
+    // The Drive OCR order can place the sender block immediately before the
+    // tracking number. Without a recipient name, that address is unsafe.
+    if (!recipient.name) address = "";
 
     if (recipient.postalCode && address.indexOf(recipient.postalCode) < 0) {
       address = (address + " " + recipient.postalCode).trim();
