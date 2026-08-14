@@ -1857,13 +1857,21 @@ function shippingLabelCompletenessScore_(label) {
 }
 
 function cleanShippingRecipientName_(marketplace, value) {
-  var name = stringValue_(value);
+  var name = normalizePdfTextForParsing_(stringValue_(value));
+  if (marketplace === "Lazada") {
+    name = name
+      .replace(/\s*(?:ที่อยู่\s*)?ADDRESS\s*:.*$/i, "")
+      .replace(/\s*ที่อยู่\s*:.*$/i, "")
+      .trim();
+  }
+  if (marketplace === "Shopee" && hasShopeeDeliveryInstruction_(name)) return "";
   if (marketplace === "TikTok Shop" && !isLikelyTikTokRecipientName_(name)) return "";
   return name;
 }
 
 function cleanShippingAddress_(value) {
-  var address = stringValue_(value)
+  var address = normalizePdfTextForParsing_(stringValue_(value))
+    .replace(/^(?:ADDRESS|ที่อยู่)\s*:?\s*/i, "")
     .replace(/\s+(?:Shopee\s+Order\s+No\.?|Order\s*ID|Product\s*Name|ชื่อสินค้า|ตัวเลือกสินค้า|In\s+transit\s+by|Qty\s*Total|NickName)\b[\s\S]*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -1872,6 +1880,10 @@ function cleanShippingAddress_(value) {
     address = postalMatch[1].trim();
   }
   return isLikelyShippingAddress_(address) ? address : "";
+}
+
+function hasShopeeDeliveryInstruction_(value) {
+  return /(?:จัดส่ง|จันทร์\s*ถึง\s*ศุกร์|ส่ง(?:ได้)?\s*เฉพาะ)/i.test(String(value || ""));
 }
 
 function isLikelyShippingAddress_(value) {
@@ -2417,11 +2429,7 @@ function parseLazadaOcrShippingLabels_(fileName, text) {
   var trackingNumber = extractLazadaTrackingNumber_(value);
   var recipientName = readOcrInlineField_(value, "Customer\\s*(?:NAME)?\\s*:\\s*([^\\r\\n]+)") ||
     readOcrField_(value, ["Receiver", "Customer"]);
-  var shippingAddress = readOcrBlockField_(
-    value,
-    "(?:ADDRESS|ที่อยู่)\\s*",
-    "\\n[^\\n]*(?:Phone number|Seller Name|Payment Type)\\s*:",
-  ) || readOcrField_(value, ["Address"]);
+  var shippingAddress = readLazadaAddress_(value) || readOcrField_(value, ["Address"]);
   var orderId = readOcrInlineField_(value, "(?:LAZADA\\s+)?Order\\s+(?:No\\.?|Number)\\s*:\\s*([A-Z0-9-]+)") ||
     readOcrField_(value, ["LAZADA Order Number", "Order No."]);
   var label = {
@@ -2432,6 +2440,23 @@ function parseLazadaOcrShippingLabels_(fileName, text) {
     trackingNumber: trackingNumber || readOcrField_(value, ["Tracking"]),
   };
   return normalizeShippingLabels_(fileName, [label]);
+}
+
+function readLazadaAddress_(text) {
+  var lines = normalizeOcrText_(text).split(/\r?\n/);
+  for (var index = 0; index < lines.length; index++) {
+    var match = /^(?:ADDRESS|ที่อยู่)\s*:?\s*(.*)$/i.exec(lines[index].trim());
+    if (!match) continue;
+
+    var parts = [match[1]].filter(Boolean);
+    for (var nextIndex = index + 1; nextIndex < lines.length; nextIndex++) {
+      var line = lines[nextIndex].trim();
+      if (/^(?:Phone number|Seller Name|Payment Type)\s*:/i.test(line)) break;
+      if (line) parts.push(line);
+    }
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  return "";
 }
 
 function extractLazadaTrackingNumber_(text) {
@@ -2723,7 +2748,10 @@ function normalizePdfTextForParsing_(text) {
   return String(text || "")
     .replace(/\uF70A/g, "\u0E48")
     .replace(/\uF70B/g, "\u0E49")
-    .replace(/([\u0E00-\u0E7F])([่้])ู/g, "$1ู$2");
+    .replace(/\uF70C/g, "\u0E4A")
+    .replace(/\uF70D/g, "\u0E4B")
+    .replace(/\uF70E/g, "\u0E4C")
+    .replace(/([\u0E00-\u0E7F])([่้๊๋])ู/g, "$1ู$2");
 }
 
 function parseShopeeRecipientBlock_(block) {

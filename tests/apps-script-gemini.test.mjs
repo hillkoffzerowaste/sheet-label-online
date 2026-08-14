@@ -1745,3 +1745,46 @@ test("keeps one best label when OCR returns the same tracking number twice", asy
   assert.equal(labels[0].shippingAddress.includes("เชียงใหม่ 50200"), true);
   assert.equal(labels[0].status, "incomplete");
 });
+
+test("separates a Lazada recipient name from an inline Thai address heading", async () => {
+  const context = await loadHelpers();
+  const labels = context.parseOcrShippingLabels_(
+    "Lazada -4.pdf",
+    [
+      "LEXPU0706169335",
+      "Order No.: 1112426874984193",
+      "Customer NAME: ณัฐพร อุดรสฤษฎ์กุล ที่อยู่ADDRESS:587 ซอยพัฒนาการ 20 กรุงเทพมหานคร 10250",
+      "ADDRESS:587 ซอยพัฒนาการ 20 กรุงเทพมหานคร 10250",
+      "Phone number: 660****067",
+      "Lazada",
+    ].join("\n"),
+  );
+
+  assert.equal(labels[0].recipientName, "ณัฐพร อุดรสฤษฎ์กุล");
+  assert.equal(labels[0].shippingAddress, "587 ซอยพัฒนาการ 20 กรุงเทพมหานคร 10250");
+  assert.equal(labels[0].status, "ready");
+});
+
+test("normalizes Drive OCR private-use Thai tone marks and thanthakhat", async () => {
+  const context = await loadHelpers();
+
+  assert.equal(
+    context.normalizePdfTextForParsing_("ป\uF70Cอปป\uF70D ศุกร\uF70E"),
+    "ป๊อปป๋ ศุกร์",
+  );
+});
+
+test("marks Shopee delivery instructions in the recipient field as incomplete", async () => {
+  const context = await loadHelpers();
+  const labels = context.normalizeShippingLabels_("1 รวม SPX.pdf", [{
+    marketplace: "Shopee",
+    recipientName: "Sukhum Office ห้องด้านหลัง จัดส่งจันทร์ถึงศุกร์เท่านั้น",
+    shippingAddress: "Sukhum Craft เลขที่ 29 หมู่ที่ 5 จังหวัดเชียงใหม่ 50230",
+    orderId: "2608138EDB7WXD",
+    trackingNumber: "TH2685687819624",
+  }]);
+
+  assert.equal(labels[0].recipientName, "");
+  assert.equal(labels[0].status, "incomplete");
+  assert.ok(labels[0].reviewReasons.includes("recipientName"));
+});
